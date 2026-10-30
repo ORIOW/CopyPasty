@@ -30,7 +30,7 @@ class StatusBarManager: NSObject {
         setupEventMonitor()
     }
 
-    /// 设置弹出框（Popover 自动跟随 SwiftUI 内容尺寸，无需手动测量）
+    /// 设置弹出框
     private func setupPopover() {
         popover.behavior = .transient
         popover.animates = true
@@ -39,6 +39,12 @@ class StatusBarManager: NSObject {
                 history: history,
                 onSelect: { [weak self] in
                     self?.popover.close()
+                },
+                onSizeChange: { [weak self] size in
+                    // 异步设置尺寸，避免在布局过程中重入修改 popover.contentSize
+                    DispatchQueue.main.async {
+                        self?.popover.contentSize = size
+                    }
                 },
                 onOpenSettings: { [weak self] in
                     self?.openSettings()
@@ -338,11 +344,11 @@ struct AboutView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Version \(Self.versionText)")
                         .font(.system(size: 10, weight: .semibold))
-                    Text("🔧 图片改存本地文件，历史记录不再塞进偏好设置")
+                    Text("🔧 修复网址被误识别为文件的问题")
+                        .font(.system(size: 10))
+                    Text("🔧 历史面板高度恢复随内容自适应")
                         .font(.system(size: 10))
                     Text("🔧 复制文件/图片记录时粘贴得到文件本身")
-                        .font(.system(size: 10))
-                    Text("✅ 自动识别拷贝的网页链接")
                         .font(.system(size: 10))
                 }
                 .foregroundStyle(.secondary)
@@ -359,6 +365,7 @@ struct AboutView: View {
 struct HistoryView: View {
     @ObservedObject var history: ClipboardHistory
     let onSelect: () -> Void
+    let onSizeChange: (NSSize) -> Void
     let onOpenSettings: () -> Void
     let onOpenAbout: () -> Void
     @AppStorage("clearOnExit") private var clearOnExit = false
@@ -371,7 +378,7 @@ struct HistoryView: View {
                 emptyStateView
             } else {
                 VStack(spacing: 0) {
-                    // 限制列表最大高度，超出部分滚动，避免 Popover 长得超过屏幕
+                    // 限制列表最大高度，超出部分滚动，避免面板超过屏幕
                     ScrollView(.vertical) {
                         listView
                     }
@@ -384,6 +391,19 @@ struct HistoryView: View {
         }
         .frame(width: 320)
         .background(Color(nsColor: .windowBackgroundColor))
+        .onGeometryChange(for: CGFloat.self) { proxy in
+            proxy.size.height
+        } action: { height in
+            updateSize(height: height)
+        }
+    }
+
+    /// 更新弹出框大小
+    private func updateSize(height: CGFloat) {
+        let minHeight: CGFloat = 200
+        let maxHeight: CGFloat = 600
+        let finalHeight = min(max(height, minHeight), maxHeight)
+        onSizeChange(NSSize(width: 320, height: finalHeight))
     }
 
     /// 头部视图
@@ -483,9 +503,9 @@ struct HistoryView: View {
                 if clearOnExit {
                     history.clearAll()
                 }
-                // 先关闭 Popover 再退出，避免 terminate 时 AppKit 关闭它自己创建的窗口产生警告
+                // 先关闭 Popover 并等动画结束再退出，避免 terminate 时 AppKit 关闭它自己创建的窗口产生警告
                 onSelect()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                     NSApplication.shared.terminate(nil)
                 }
             }

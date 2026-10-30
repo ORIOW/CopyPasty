@@ -302,16 +302,16 @@ class ClipboardHistory: ObservableObject {
                 wrote = true
             } else if item.content.hasPrefix("/"),
                       let first = item.content.components(separatedBy: "\n").first,
-                      FileManager.default.fileExists(atPath: first) {
+                      FileManager.default.isReadableFile(atPath: first) {
                 pasteboard.writeObjects([URL(fileURLWithPath: first) as NSURL])
                 wrote = true
             }
         case .file:
-            // 写入文件引用，粘贴时可得到文件本身而非路径文本
+            // 写入文件引用，粘贴时可得到文件本身而非路径文本；文件不可读（已删除或沙盒外）则回退为文本
             let fileURLs = item.content.components(separatedBy: "\n")
                 .filter { !$0.isEmpty }
                 .map { URL(fileURLWithPath: $0) }
-            if !fileURLs.isEmpty {
+            if !fileURLs.isEmpty, fileURLs.allSatisfy({ FileManager.default.isReadableFile(atPath: $0.path) }) {
                 pasteboard.writeObjects(fileURLs as [NSURL])
                 wrote = true
             }

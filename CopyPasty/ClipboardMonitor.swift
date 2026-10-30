@@ -44,8 +44,11 @@ class ClipboardMonitor {
         guard pasteboard.changeCount != lastChangeCount else { return }
         lastChangeCount = pasteboard.changeCount
 
-        // 首先检查是否有文件（优先处理文件，这样可以获取文件名）
-        if let fileURLs = pasteboard.readObjects(forClasses: [NSURL.self], options: [:]) as? [URL], !fileURLs.isEmpty {
+        // 网页链接也是 NSURL，先按 file:// 与 http(s) 分流，避免网址被误记成文件
+        let pasteboardURLs = (pasteboard.readObjects(forClasses: [NSURL.self], options: [:]) as? [URL]) ?? []
+        let fileURLs = pasteboardURLs.filter { $0.isFileURL }
+
+        if !fileURLs.isEmpty {
             var thumbnailData: Data? = nil
             var displayName = ""
             var itemType: ClipboardItem.ClipboardType = .file
@@ -81,6 +84,10 @@ class ClipboardMonitor {
             DispatchQueue.main.async { [weak self] in
                 self?.history?.addItem(filePaths, type: itemType, thumbnailData: thumbnailData, displayName: displayName, fileSize: totalFileSize)
             }
+        } else if let webURL = pasteboardURLs.first(where: { Self.isWebURL($0) }) {
+            DispatchQueue.main.async { [weak self] in
+                self?.history?.addItem(webURL.absoluteString, type: .url)
+            }
         } else if let image = NSImage(pasteboard: pasteboard) {
             // 直接复制的图片数据（没有文件名）；content 用唯一值，避免不同图片按内容互相去重覆盖
             let thumbnailData = generateThumbnailData(from: image)
@@ -95,13 +102,16 @@ class ClipboardMonitor {
         }
     }
 
+    /// 判断是否为网页链接
+    private static func isWebURL(_ url: URL) -> Bool {
+        guard let scheme = url.scheme?.lowercased(), url.host != nil else { return false }
+        return ["http", "https"].contains(scheme)
+    }
+
     /// 识别文本类型：合法的 http/https 链接记为 url，其余记为文本
     private static func clipboardType(for string: String) -> ClipboardItem.ClipboardType {
         let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let url = URL(string: trimmed),
-           let scheme = url.scheme?.lowercased(),
-           url.host != nil,
-           ["http", "https"].contains(scheme) {
+        if let url = URL(string: trimmed), isWebURL(url) {
             return .url
         }
         return .text

@@ -547,6 +547,11 @@ struct HistoryRow: View {
                     .aspectRatio(contentMode: .fit)
                     .frame(width: 40, height: 40)
                     .cornerRadius(4)
+                    // 描边避免白色/浅色图片在浅色模式行背景上隐形
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 4)
+                            .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5)
+                    )
             } else {
                 Image(systemName: iconForType(item.itemType))
                     .foregroundStyle(.blue)

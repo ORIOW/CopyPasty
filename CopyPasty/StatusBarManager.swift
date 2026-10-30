@@ -30,21 +30,15 @@ class StatusBarManager: NSObject {
         setupEventMonitor()
     }
 
-    /// 设置弹出框
+    /// 设置弹出框（hosting 控制器把 SwiftUI 内容的理想尺寸同步给 Popover，实现高度自适应）
     private func setupPopover() {
         popover.behavior = .transient
         popover.animates = true
-        popover.contentViewController = NSHostingController(
+        let hostingController = NSHostingController(
             rootView: HistoryView(
                 history: history,
                 onSelect: { [weak self] in
                     self?.popover.close()
-                },
-                onSizeChange: { [weak self] size in
-                    // 异步设置尺寸，避免在布局过程中重入修改 popover.contentSize
-                    DispatchQueue.main.async {
-                        self?.popover.contentSize = size
-                    }
                 },
                 onOpenSettings: { [weak self] in
                     self?.openSettings()
@@ -54,6 +48,8 @@ class StatusBarManager: NSObject {
                 }
             )
         )
+        hostingController.sizingOptions = [.preferredContentSize]
+        popover.contentViewController = hostingController
     }
 
     /// 设置菜单栏图标
@@ -365,7 +361,6 @@ struct AboutView: View {
 struct HistoryView: View {
     @ObservedObject var history: ClipboardHistory
     let onSelect: () -> Void
-    let onSizeChange: (NSSize) -> Void
     let onOpenSettings: () -> Void
     let onOpenAbout: () -> Void
     @AppStorage("clearOnExit") private var clearOnExit = false
@@ -391,19 +386,6 @@ struct HistoryView: View {
         }
         .frame(width: 320)
         .background(Color(nsColor: .windowBackgroundColor))
-        .onGeometryChange(for: CGFloat.self) { proxy in
-            proxy.size.height
-        } action: { height in
-            updateSize(height: height)
-        }
-    }
-
-    /// 更新弹出框大小
-    private func updateSize(height: CGFloat) {
-        let minHeight: CGFloat = 200
-        let maxHeight: CGFloat = 600
-        let finalHeight = min(max(height, minHeight), maxHeight)
-        onSizeChange(NSSize(width: 320, height: finalHeight))
     }
 
     /// 头部视图

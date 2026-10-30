@@ -10,6 +10,16 @@
 
 ---
 
+## 0.13.2.261031_beta (2026-10-31)
+
+### 修复
+- 🐛 历史面板高度不随记录数量变化：改用 NSHostingController.sizingOptions = .preferredContentSize，由 AppKit 把 SwiftUI 内容的理想尺寸同步给 Popover（此前在尺寸被钳制的视图内测量高度，存在鸡生蛋死结）
+
+### 备注
+- 点击记录 / 退出时控制台的 `-close`、`makeKeyWindow`、`NSXPCDecoder`、task name port 警告均为 macOS 26 AppKit 系统噪音，应用侧无法消除
+
+---
+
 ## 0.13.1.261031_beta (2026-10-31)
 
 ### 修复

@@ -540,13 +540,15 @@ struct HistoryRow: View {
 
     /// 视图主体
     var body: some View {
-        HStack(alignment: .center, spacing: 10) {
-            if let waveform = item.waveformImage {
+        // 波形图只解码一次，供图片分支与 lineLimit 判断共用
+        let waveform = item.waveformImage
+        return HStack(alignment: .center, spacing: 10) {
+            if let waveform {
                 // 音频文件：显示整条波形图
                 Image(nsImage: waveform)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
-                    .frame(width: 150, height: 36)
+                    .frame(width: 120, height: 36)
                     .cornerRadius(4)
                     .overlay(
                         RoundedRectangle(cornerRadius: 4)
@@ -570,7 +572,7 @@ struct HistoryRow: View {
             }
 
             Text(item.displayContent)
-                .lineLimit(item.waveformImage != nil ? 1 : 2)
+                .lineLimit(waveform != nil ? 1 : 2)
                 .font(.system(size: 13))
 
             Spacer()

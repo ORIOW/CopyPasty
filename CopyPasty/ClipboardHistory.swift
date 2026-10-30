@@ -259,10 +259,11 @@ class ClipboardHistory: ObservableObject {
         loadHistory()
     }
 
-    /// 添加剪贴板记录
-    func addItem(_ content: String, type: ClipboardItem.ClipboardType = .text, thumbnailData: Data? = nil, imageData: Data? = nil, waveformData: Data? = nil, displayName: String? = nil, fileSize: Int64? = nil) {
+    /// 添加剪贴板记录，返回新建的记录（媒体图片可稍后用 updateMediaImage 原地补充）
+    @discardableResult
+    func addItem(_ content: String, type: ClipboardItem.ClipboardType = .text, thumbnailData: Data? = nil, imageData: Data? = nil, waveformData: Data? = nil, displayName: String? = nil, fileSize: Int64? = nil) -> ClipboardItem? {
         let trimmedContent = content.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedContent.isEmpty else { return }
+        guard !trimmedContent.isEmpty else { return nil }
 
         var newItem = ClipboardItem(content: trimmedContent, itemType: type, thumbnailData: thumbnailData, imageData: imageData, waveformData: waveformData, displayName: displayName, fileSize: fileSize)
         // 先把图片落盘（失败则保留内存数据待重试），成功后再清理被去重覆盖的旧文件
@@ -294,6 +295,23 @@ class ClipboardHistory: ObservableObject {
             deleteImageFiles(of: items.removeLast())
         }
 
+        saveHistory()
+        return newItem
+    }
+
+    /// 为已有记录原地补充媒体图片（音频波形/视频缩略图）；记录已被删除时静默放弃
+    func updateMediaImage(id: UUID, kind: String, data: Data) {
+        guard let index = items.firstIndex(where: { $0.id == id }) else { return }
+        guard let fileName = ClipboardImageStore.shared.save(data, id: id, kind: kind) else { return }
+        switch kind {
+        case "thumbnail":
+            items[index].thumbnailFileName = fileName
+        case "waveform":
+            items[index].waveformFileName = fileName
+        default:
+            ClipboardImageStore.shared.delete(fileName)
+            return
+        }
         saveHistory()
     }
 

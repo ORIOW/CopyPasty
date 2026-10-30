@@ -55,6 +55,7 @@ class ClipboardMonitor {
             var itemType: ClipboardItem.ClipboardType = .file
             var totalFileSize: Int64? = nil
             var audioFileURL: URL? = nil
+            var videoFileURL: URL? = nil
 
             if fileURLs.count == 1, let fileURL = fileURLs.first {
                 displayName = fileURL.lastPathComponent
@@ -65,6 +66,8 @@ class ClipboardMonitor {
                     itemType = .image
                 } else if Self.audioExtensions.contains(fileExtension) {
                     audioFileURL = fileURL
+                } else if Self.videoExtensions.contains(fileExtension) {
+                    videoFileURL = fileURL
                 }
                 // 获取文件大小
                 if let fileSize = try? FileManager.default.attributesOfItem(atPath: fileURL.path)[.size] as? Int64 {
@@ -86,9 +89,18 @@ class ClipboardMonitor {
 
             let filePaths = fileURLs.map { $0.path }.joined(separator: "\n")
             if let audioFileURL {
-                // 音频文件：后台解码生成波形图，完成后记录
+                // 音频文件：先同步入库占位（保持拷贝顺序、退出不丢记录），波形生成完成后原地补充
+                let placeholder = history?.addItem(filePaths, type: itemType, displayName: displayName, fileSize: totalFileSize)
                 Self.loadWaveformData(for: audioFileURL) { [weak self] waveformData in
-                    self?.history?.addItem(filePaths, type: itemType, waveformData: waveformData, displayName: displayName, fileSize: totalFileSize)
+                    guard let waveformData, let placeholder else { return }
+                    self?.history?.updateMediaImage(id: placeholder.id, kind: "waveform", data: waveformData)
+                }
+            } else if let videoFileURL {
+                // 视频文件：先同步入库占位，缩略图生成完成后原地补充
+                let placeholder = history?.addItem(filePaths, type: itemType, displayName: displayName, fileSize: totalFileSize)
+                Self.loadVideoThumbnailData(for: videoFileURL) { [weak self] thumbnailData in
+                    guard let thumbnailData, let placeholder else { return }
+                    self?.history?.updateMediaImage(id: placeholder.id, kind: "thumbnail", data: thumbnailData)
                 }
             } else {
                 DispatchQueue.main.async { [weak self] in
@@ -116,6 +128,68 @@ class ClipboardMonitor {
     /// 支持生成波形图的音频扩展名
     static let audioExtensions = ["mp3", "wav", "aiff", "aif", "m4a", "aac", "flac", "caf"]
 
+    /// 支持抽帧的视频扩展名
+    static let videoExtensions = ["mp4", "mov", "m4v", "avi", "mkv", "webm", "mpg", "mpeg"]
+
+    /// 后台从视频抽帧生成带播放键的缩略图 PNG
+    private static func loadVideoThumbnailData(for fileURL: URL, completion: @escaping (Data?) -> Void) {
+        Task.detached(priority: .utility) {
+            let asset = AVURLAsset(url: fileURL)
+            guard let duration = try? await asset.load(.duration), duration.seconds > 0 else {
+                await MainActor.run { completion(nil) }
+                return
+            }
+            let generator = AVAssetImageGenerator(asset: asset)
+            generator.appliesPreferredTrackTransform = true
+            generator.maximumSize = CGSize(width: 120, height: 120)
+            // 取 10% 处的帧，避开常为黑场的首帧
+            let sampleTime = CMTime(seconds: duration.seconds * 0.1, preferredTimescale: 600)
+            do {
+                let (cgImage, _) = try await generator.image(at: sampleTime)
+                await MainActor.run {
+                    completion(renderVideoThumbnail(cgImage: cgImage, maxPixelSize: 120))
+                }
+            } catch {
+                await MainActor.run { completion(nil) }
+            }
+        }
+    }
+
+    /// 把抽出的帧按比例缩放并叠加播放按键，生成 PNG
+    private nonisolated static func renderVideoThumbnail(cgImage: CGImage, maxPixelSize: CGFloat) -> Data? {
+        let pixelWidth = CGFloat(cgImage.width)
+        let pixelHeight = CGFloat(cgImage.height)
+        guard pixelWidth > 0, pixelHeight > 0 else { return nil }
+
+        let scale = min(maxPixelSize / pixelWidth, maxPixelSize / pixelHeight, 1)
+        let size = NSSize(width: max(pixelWidth * scale, 1), height: max(pixelHeight * scale, 1))
+        let frame = NSImage(cgImage: cgImage, size: size)
+
+        let thumbnail = NSImage(size: size)
+        thumbnail.lockFocus()
+        frame.draw(in: NSRect(origin: .zero, size: size))
+
+        // 播放按键：半透明圆底 + 白色三角
+        let buttonRadius = min(size.width, size.height) * 0.30
+        let center = NSPoint(x: size.width / 2, y: size.height / 2)
+        NSColor(white: 0, alpha: 0.55).setFill()
+        NSBezierPath(ovalIn: NSRect(x: center.x - buttonRadius, y: center.y - buttonRadius, width: buttonRadius * 2, height: buttonRadius * 2)).fill()
+
+        let triangleRadius = buttonRadius * 0.55
+        // 三角形整体右移一点做光学居中（与 SF Symbol play.fill 的处理一致）
+        let offsetX = buttonRadius * 0.12
+        let triangle = NSBezierPath()
+        triangle.move(to: NSPoint(x: center.x + offsetX - triangleRadius * 0.6, y: center.y + triangleRadius))
+        triangle.line(to: NSPoint(x: center.x + offsetX - triangleRadius * 0.6, y: center.y - triangleRadius))
+        triangle.line(to: NSPoint(x: center.x + offsetX + triangleRadius * 0.8, y: center.y))
+        triangle.close()
+        NSColor.white.setFill()
+        triangle.fill()
+
+        thumbnail.unlockFocus()
+        return thumbnail.tiffRepresentation
+    }
+
     /// 后台解码音频，均匀采样各区间峰值后回主线程绘制波形 PNG
     private static func loadWaveformData(for fileURL: URL, completion: @escaping (Data?) -> Void) {
         DispatchQueue.global(qos: .utility).async {
@@ -125,13 +199,13 @@ class ClipboardMonitor {
                     completion(nil)
                     return
                 }
-                completion(renderWaveformPNG(peaks: peaks, size: NSSize(width: 150, height: 36)))
+                completion(renderWaveformPNG(peaks: peaks, size: NSSize(width: 120, height: 36)))
             }
         }
     }
 
     /// 均匀采样 bins 个区间的峰值（每个区间只读一小段，避免长音频整文件解码）
-    private static func computeWaveformPeaks(for fileURL: URL, bins: Int) -> [CGFloat]? {
+    private nonisolated static func computeWaveformPeaks(for fileURL: URL, bins: Int) -> [CGFloat]? {
         guard let audioFile = try? AVAudioFile(forReading: fileURL),
               audioFile.length > 0 else { return nil }
 
@@ -165,23 +239,23 @@ class ClipboardMonitor {
         return peaks.isEmpty ? nil : peaks
     }
 
-    /// 把峰值序列绘制成对称波形条 PNG
-    private static func renderWaveformPNG(peaks: [CGFloat], size: NSSize) -> Data? {
-        guard let maxPeak = peaks.max(), maxPeak > 0 else { return nil }
+    /// 把峰值序列绘制成对称波形条 PNG（先按数量分配槽位再推柱宽，保证不溢出画布）
+    private nonisolated static func renderWaveformPNG(peaks: [CGFloat], size: NSSize) -> Data? {
+        guard let maxPeak = peaks.max(), maxPeak > 0, !peaks.isEmpty else { return nil }
 
         let image = NSImage(size: size)
         image.lockFocus()
 
         // 固定蓝色在深浅色背景下都清晰
         NSColor(calibratedRed: 0.25, green: 0.55, blue: 0.95, alpha: 1).setFill()
-        let gap: CGFloat = 1.5
-        let barWidth = max((size.width - gap * CGFloat(peaks.count - 1)) / CGFloat(peaks.count), 1)
+        let slot = size.width / CGFloat(peaks.count)
+        let barWidth = max(slot * 0.7, 0.5)
         let drawableHeight = size.height - 4
 
         for (index, peak) in peaks.enumerated() {
             let normalized = peak / maxPeak
             let barHeight = max(drawableHeight * normalized, 1.5)
-            let x = CGFloat(index) * (barWidth + gap)
+            let x = CGFloat(index) * slot + (slot - barWidth) / 2
             let y = (size.height - barHeight) / 2
             NSBezierPath(roundedRect: NSRect(x: x, y: y, width: barWidth, height: barHeight), xRadius: 1, yRadius: 1).fill()
         }

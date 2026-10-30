@@ -70,12 +70,14 @@ struct ClipboardItem: Identifiable, Codable {
     let timestamp: Date
     let itemType: ClipboardType
     let fileSize: Int64?
-    /// 磁盘上的缩略图/原图文件名（持久化字段）
+    /// 磁盘上的缩略图/原图/波形图文件名（持久化字段）
     var thumbnailFileName: String?
     var imageFileName: String?
+    var waveformFileName: String?
     /// 内存中待落盘的图片数据（不持久化，写入磁盘后置空）
     var thumbnailData: Data?
     var imageData: Data?
+    var waveformData: Data?
 
     /// 剪贴板内容类型
     enum ClipboardType: String, Codable {
@@ -89,13 +91,13 @@ struct ClipboardItem: Identifiable, Codable {
     /// 持久化键：图片二进制仅作旧数据迁移读取，不再写出
     enum CodingKeys: String, CodingKey {
         case id, content, displayName, timestamp, itemType, fileSize
-        case thumbnailFileName, imageFileName
+        case thumbnailFileName, imageFileName, waveformFileName
         case legacyThumbnailData = "thumbnailData"
         case legacyImageData = "imageData"
     }
 
     /// 初始化
-    init(id: UUID = UUID(), content: String, timestamp: Date = Date(), itemType: ClipboardType = .text, thumbnailData: Data? = nil, imageData: Data? = nil, thumbnailFileName: String? = nil, imageFileName: String? = nil, displayName: String? = nil, fileSize: Int64? = nil) {
+    init(id: UUID = UUID(), content: String, timestamp: Date = Date(), itemType: ClipboardType = .text, thumbnailData: Data? = nil, imageData: Data? = nil, waveformData: Data? = nil, thumbnailFileName: String? = nil, imageFileName: String? = nil, waveformFileName: String? = nil, displayName: String? = nil, fileSize: Int64? = nil) {
         self.id = id
         self.content = content
         self.displayName = displayName
@@ -103,8 +105,10 @@ struct ClipboardItem: Identifiable, Codable {
         self.itemType = itemType
         self.thumbnailData = thumbnailData
         self.imageData = imageData
+        self.waveformData = waveformData
         self.thumbnailFileName = thumbnailFileName
         self.imageFileName = imageFileName
+        self.waveformFileName = waveformFileName
         self.fileSize = fileSize
     }
 
@@ -119,6 +123,7 @@ struct ClipboardItem: Identifiable, Codable {
         fileSize = try container.decodeIfPresent(Int64.self, forKey: .fileSize)
         thumbnailFileName = try container.decodeIfPresent(String.self, forKey: .thumbnailFileName)
         imageFileName = try container.decodeIfPresent(String.self, forKey: .imageFileName)
+        waveformFileName = try container.decodeIfPresent(String.self, forKey: .waveformFileName)
         thumbnailData = try container.decodeIfPresent(Data.self, forKey: .legacyThumbnailData)
         imageData = try container.decodeIfPresent(Data.self, forKey: .legacyImageData)
     }
@@ -134,6 +139,7 @@ struct ClipboardItem: Identifiable, Codable {
         try container.encodeIfPresent(fileSize, forKey: .fileSize)
         try container.encodeIfPresent(thumbnailFileName, forKey: .thumbnailFileName)
         try container.encodeIfPresent(imageFileName, forKey: .imageFileName)
+        try container.encodeIfPresent(waveformFileName, forKey: .waveformFileName)
     }
 
     /// 缩略图（优先内存数据，其次磁盘文件）
@@ -158,9 +164,20 @@ struct ClipboardItem: Identifiable, Codable {
         return nil
     }
 
+    /// 音频波形图（优先内存数据，其次磁盘文件）
+    var waveformImage: NSImage? {
+        if let waveformData {
+            return NSImage(data: waveformData)
+        }
+        if let waveformFileName {
+            return ClipboardImageStore.shared.load(waveformFileName)
+        }
+        return nil
+    }
+
     /// 记录关联的图片文件名集合
     var imageFileNames: Set<String> {
-        Set([thumbnailFileName, imageFileName].compactMap { $0 })
+        Set([thumbnailFileName, imageFileName, waveformFileName].compactMap { $0 })
     }
 
     /// 显示内容（截断过长文本）
@@ -243,11 +260,11 @@ class ClipboardHistory: ObservableObject {
     }
 
     /// 添加剪贴板记录
-    func addItem(_ content: String, type: ClipboardItem.ClipboardType = .text, thumbnailData: Data? = nil, imageData: Data? = nil, displayName: String? = nil, fileSize: Int64? = nil) {
+    func addItem(_ content: String, type: ClipboardItem.ClipboardType = .text, thumbnailData: Data? = nil, imageData: Data? = nil, waveformData: Data? = nil, displayName: String? = nil, fileSize: Int64? = nil) {
         let trimmedContent = content.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedContent.isEmpty else { return }
 
-        var newItem = ClipboardItem(content: trimmedContent, itemType: type, thumbnailData: thumbnailData, imageData: imageData, displayName: displayName, fileSize: fileSize)
+        var newItem = ClipboardItem(content: trimmedContent, itemType: type, thumbnailData: thumbnailData, imageData: imageData, waveformData: waveformData, displayName: displayName, fileSize: fileSize)
         // 先把图片落盘（失败则保留内存数据待重试），成功后再清理被去重覆盖的旧文件
         if let data = newItem.thumbnailData {
             newItem.thumbnailFileName = ClipboardImageStore.shared.save(data, id: newItem.id, kind: "thumbnail")
@@ -259,6 +276,12 @@ class ClipboardHistory: ObservableObject {
             newItem.imageFileName = ClipboardImageStore.shared.save(data, id: newItem.id, kind: "original")
             if newItem.imageFileName != nil {
                 newItem.imageData = nil
+            }
+        }
+        if let data = newItem.waveformData {
+            newItem.waveformFileName = ClipboardImageStore.shared.save(data, id: newItem.id, kind: "waveform")
+            if newItem.waveformFileName != nil {
+                newItem.waveformData = nil
             }
         }
 

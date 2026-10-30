@@ -7,6 +7,7 @@
 
 import Foundation
 import AppKit
+import AVFoundation
 
 /// 剪贴板监听器
 class ClipboardMonitor {
@@ -53,6 +54,7 @@ class ClipboardMonitor {
             var displayName = ""
             var itemType: ClipboardItem.ClipboardType = .file
             var totalFileSize: Int64? = nil
+            var audioFileURL: URL? = nil
 
             if fileURLs.count == 1, let fileURL = fileURLs.first {
                 displayName = fileURL.lastPathComponent
@@ -61,6 +63,8 @@ class ClipboardMonitor {
                 if imageExtensions.contains(fileExtension), let image = NSImage(contentsOf: fileURL) {
                     thumbnailData = generateThumbnailData(from: image)
                     itemType = .image
+                } else if Self.audioExtensions.contains(fileExtension) {
+                    audioFileURL = fileURL
                 }
                 // 获取文件大小
                 if let fileSize = try? FileManager.default.attributesOfItem(atPath: fileURL.path)[.size] as? Int64 {
@@ -81,8 +85,15 @@ class ClipboardMonitor {
             }
 
             let filePaths = fileURLs.map { $0.path }.joined(separator: "\n")
-            DispatchQueue.main.async { [weak self] in
-                self?.history?.addItem(filePaths, type: itemType, thumbnailData: thumbnailData, displayName: displayName, fileSize: totalFileSize)
+            if let audioFileURL {
+                // 音频文件：后台解码生成波形图，完成后记录
+                Self.loadWaveformData(for: audioFileURL) { [weak self] waveformData in
+                    self?.history?.addItem(filePaths, type: itemType, waveformData: waveformData, displayName: displayName, fileSize: totalFileSize)
+                }
+            } else {
+                DispatchQueue.main.async { [weak self] in
+                    self?.history?.addItem(filePaths, type: itemType, thumbnailData: thumbnailData, displayName: displayName, fileSize: totalFileSize)
+                }
             }
         } else if let webURL = pasteboardURLs.first(where: { Self.isWebURL($0) }) {
             DispatchQueue.main.async { [weak self] in
@@ -100,6 +111,83 @@ class ClipboardMonitor {
                 self?.history?.addItem(string, type: Self.clipboardType(for: string))
             }
         }
+    }
+
+    /// 支持生成波形图的音频扩展名
+    static let audioExtensions = ["mp3", "wav", "aiff", "aif", "m4a", "aac", "flac", "caf"]
+
+    /// 后台解码音频，均匀采样各区间峰值后回主线程绘制波形 PNG
+    private static func loadWaveformData(for fileURL: URL, completion: @escaping (Data?) -> Void) {
+        DispatchQueue.global(qos: .utility).async {
+            let peaks = computeWaveformPeaks(for: fileURL, bins: 80)
+            DispatchQueue.main.async {
+                guard let peaks else {
+                    completion(nil)
+                    return
+                }
+                completion(renderWaveformPNG(peaks: peaks, size: NSSize(width: 150, height: 36)))
+            }
+        }
+    }
+
+    /// 均匀采样 bins 个区间的峰值（每个区间只读一小段，避免长音频整文件解码）
+    private static func computeWaveformPeaks(for fileURL: URL, bins: Int) -> [CGFloat]? {
+        guard let audioFile = try? AVAudioFile(forReading: fileURL),
+              audioFile.length > 0 else { return nil }
+
+        let totalFrames = audioFile.length
+        let channelCount = min(audioFile.processingFormat.channelCount, 2)
+        var peaks: [CGFloat] = []
+
+        for bin in 0..<bins {
+            let binStart = totalFrames * Int64(bin) / Int64(bins)
+            let binEnd = max(binStart + 1, totalFrames * Int64(bin + 1) / Int64(bins))
+            let readCount = min(binEnd - binStart, 4096)
+            guard let buffer = AVAudioPCMBuffer(pcmFormat: audioFile.processingFormat, frameCapacity: AVAudioFrameCount(readCount)) else { return nil }
+            audioFile.framePosition = binStart
+            do {
+                try audioFile.read(into: buffer, frameCount: AVAudioFrameCount(readCount))
+            } catch {
+                return peaks.isEmpty ? nil : peaks
+            }
+            guard buffer.frameLength > 0, let channelData = buffer.floatChannelData else { continue }
+
+            // 取前两个声道的最大绝对值作为该区间峰值
+            var peak: Float = 0
+            for channel in 0..<Int(min(channelCount, buffer.format.channelCount)) {
+                let samples = channelData[channel]
+                for frame in 0..<Int(buffer.frameLength) {
+                    peak = max(peak, abs(samples[frame]))
+                }
+            }
+            peaks.append(CGFloat(peak))
+        }
+        return peaks.isEmpty ? nil : peaks
+    }
+
+    /// 把峰值序列绘制成对称波形条 PNG
+    private static func renderWaveformPNG(peaks: [CGFloat], size: NSSize) -> Data? {
+        guard let maxPeak = peaks.max(), maxPeak > 0 else { return nil }
+
+        let image = NSImage(size: size)
+        image.lockFocus()
+
+        // 固定蓝色在深浅色背景下都清晰
+        NSColor(calibratedRed: 0.25, green: 0.55, blue: 0.95, alpha: 1).setFill()
+        let gap: CGFloat = 1.5
+        let barWidth = max((size.width - gap * CGFloat(peaks.count - 1)) / CGFloat(peaks.count), 1)
+        let drawableHeight = size.height - 4
+
+        for (index, peak) in peaks.enumerated() {
+            let normalized = peak / maxPeak
+            let barHeight = max(drawableHeight * normalized, 1.5)
+            let x = CGFloat(index) * (barWidth + gap)
+            let y = (size.height - barHeight) / 2
+            NSBezierPath(roundedRect: NSRect(x: x, y: y, width: barWidth, height: barHeight), xRadius: 1, yRadius: 1).fill()
+        }
+
+        image.unlockFocus()
+        return image.tiffRepresentation
     }
 
     /// 判断是否为网页链接

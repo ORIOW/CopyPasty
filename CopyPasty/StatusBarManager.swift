@@ -340,11 +340,11 @@ struct AboutView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Version \(Self.versionText)")
                         .font(.system(size: 10, weight: .semibold))
+                    Text("✅ 音频文件记录显示波形图")
+                        .font(.system(size: 10))
                     Text("🔧 修复网址被误识别为文件的问题")
                         .font(.system(size: 10))
-                    Text("🔧 历史面板高度恢复随内容自适应")
-                        .font(.system(size: 10))
-                    Text("🔧 复制文件/图片记录时粘贴得到文件本身")
+                    Text("🔧 浅色模式下图片缩略图更清晰")
                         .font(.system(size: 10))
                 }
                 .foregroundStyle(.secondary)
@@ -541,7 +541,18 @@ struct HistoryRow: View {
     /// 视图主体
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
-            if let image = item.thumbnailImage {
+            if let waveform = item.waveformImage {
+                // 音频文件：显示整条波形图
+                Image(nsImage: waveform)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 150, height: 36)
+                    .cornerRadius(4)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 4)
+                            .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5)
+                    )
+            } else if let image = item.thumbnailImage {
                 Image(nsImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
@@ -559,7 +570,7 @@ struct HistoryRow: View {
             }
 
             Text(item.displayContent)
-                .lineLimit(2)
+                .lineLimit(item.waveformImage != nil ? 1 : 2)
                 .font(.system(size: 13))
 
             Spacer()

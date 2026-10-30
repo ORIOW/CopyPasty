@@ -93,6 +93,17 @@ class StatusBarManager: NSObject {
         }
     }
 
+    /// 创建按 SwiftUI 内容自适应大小的窗口（避免手动 layoutSubtreeIfNeeded 与 NSHostingView 布局重入）
+    private func makeWindow<Content: View>(title: String, styleMask: NSWindow.StyleMask, @ViewBuilder rootView: () -> Content) -> NSWindow {
+        let window = NSWindow(contentViewController: NSHostingController(rootView: rootView()))
+        window.styleMask = styleMask
+        window.title = title
+        window.isReleasedWhenClosed = false
+        window.delegate = self
+        window.center()
+        return window
+    }
+
     /// 打开首次引导页
     private func openOnboarding() {
         if let existingWindow = onboardingWindow {
@@ -101,32 +112,16 @@ class StatusBarManager: NSObject {
             return
         }
 
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 420),
-            styleMask: [.titled, .closable],
-            backing: .buffered,
-            defer: false
-        )
-        window.title = "欢迎使用 CopyPasty"
-        window.contentViewController = NSHostingController(
-            rootView: OnboardingView { [weak self] in
+        let window = makeWindow(title: "欢迎使用 CopyPasty", styleMask: [.titled, .closable]) {
+            OnboardingView { [weak self] in
                 self?.markOnboardingAsSeen()
                 self?.onboardingWindow?.close()
             }
-        )
-        window.isReleasedWhenClosed = false
-        window.delegate = self
+        }
 
         onboardingWindow = window
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-
-        DispatchQueue.main.async {
-            window.contentViewController?.view.layoutSubtreeIfNeeded()
-            let size = window.contentViewController?.view.fittingSize ?? NSSize(width: 520, height: 420)
-            window.setContentSize(size)
-            window.center()
-        }
     }
 
     /// 标记首次引导页已显示
@@ -144,34 +139,18 @@ class StatusBarManager: NSObject {
             return
         }
 
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 400, height: 200),
-            styleMask: [.titled, .closable, .miniaturizable],
-            backing: .buffered,
-            defer: false
-        )
-        window.title = "CopyPasty 设置"
-        window.contentViewController = NSHostingController(
-            rootView: SettingsView(
+        let window = makeWindow(title: "CopyPasty 设置", styleMask: [.titled, .closable, .miniaturizable]) {
+            SettingsView(
                 history: history,
                 onOpenOnboarding: { [weak self] in
                     self?.openOnboarding()
                 }
             )
-        )
-        window.isReleasedWhenClosed = false
-        window.delegate = self
+        }
 
         settingsWindow = window
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-
-        DispatchQueue.main.async {
-            window.contentViewController?.view.layoutSubtreeIfNeeded()
-            let size = window.contentViewController?.view.fittingSize ?? NSSize(width: 400, height: 200)
-            window.setContentSize(size)
-            window.center()
-        }
     }
 
     /// 打开关于窗口
@@ -184,27 +163,13 @@ class StatusBarManager: NSObject {
             return
         }
 
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 550, height: 300),
-            styleMask: [.titled, .closable, .miniaturizable],
-            backing: .buffered,
-            defer: false
-        )
-        window.title = "关于"
-        window.contentViewController = NSHostingController(rootView: AboutView())
-        window.isReleasedWhenClosed = false
-        window.delegate = self
+        let window = makeWindow(title: "关于", styleMask: [.titled, .closable, .miniaturizable]) {
+            AboutView()
+        }
 
         aboutWindow = window
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-
-        DispatchQueue.main.async {
-            window.contentViewController?.view.layoutSubtreeIfNeeded()
-            let size = window.contentViewController?.view.fittingSize ?? NSSize(width: 550, height: 300)
-            window.setContentSize(size)
-            window.center()
-        }
     }
 
     deinit {

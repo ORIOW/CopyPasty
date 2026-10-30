@@ -30,7 +30,7 @@ class StatusBarManager: NSObject {
         setupEventMonitor()
     }
 
-    /// 设置弹出框
+    /// 设置弹出框（Popover 自动跟随 SwiftUI 内容尺寸，无需手动测量）
     private func setupPopover() {
         popover.behavior = .transient
         popover.animates = true
@@ -39,9 +39,6 @@ class StatusBarManager: NSObject {
                 history: history,
                 onSelect: { [weak self] in
                     self?.popover.close()
-                },
-                onSizeChange: { [weak self] size in
-                    self?.popover.contentSize = size
                 },
                 onOpenSettings: { [weak self] in
                     self?.openSettings()
@@ -76,11 +73,8 @@ class StatusBarManager: NSObject {
     @objc func togglePopover(_ sender: AnyObject?) {
         if popover.isShown {
             popover.performClose(sender)
-        } else {
-            if let button = statusItem?.button {
-                popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-                popover.contentViewController?.view.window?.makeKeyAndOrderFront(nil)
-            }
+        } else if let button = statusItem?.button {
+            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         }
     }
 
@@ -365,7 +359,6 @@ struct AboutView: View {
 struct HistoryView: View {
     @ObservedObject var history: ClipboardHistory
     let onSelect: () -> Void
-    let onSizeChange: (NSSize) -> Void
     let onOpenSettings: () -> Void
     let onOpenAbout: () -> Void
     @AppStorage("clearOnExit") private var clearOnExit = false
@@ -378,7 +371,11 @@ struct HistoryView: View {
                 emptyStateView
             } else {
                 VStack(spacing: 0) {
-                    listView
+                    // 限制列表最大高度，超出部分滚动，避免 Popover 长得超过屏幕
+                    ScrollView(.vertical) {
+                        listView
+                    }
+                    .frame(maxHeight: 480)
                     hintView
                 }
             }
@@ -387,27 +384,6 @@ struct HistoryView: View {
         }
         .frame(width: 320)
         .background(Color(nsColor: .windowBackgroundColor))
-        .background(
-            GeometryReader { geo in
-                Color.clear
-                    .onAppear {
-                        updateSize(height: geo.size.height)
-                    }
-                    .onChange(of: history.items.count) { oldCount, newCount in
-                        DispatchQueue.main.async {
-                            updateSize(height: geo.size.height)
-                        }
-                    }
-            }
-        )
-    }
-
-    /// 更新弹出框大小
-    private func updateSize(height: CGFloat) {
-        let minHeight: CGFloat = 200
-        let maxHeight: CGFloat = 600
-        let finalHeight = min(max(height, minHeight), maxHeight)
-        onSizeChange(NSSize(width: 320, height: finalHeight))
     }
 
     /// 头部视图
@@ -507,6 +483,8 @@ struct HistoryView: View {
                 if clearOnExit {
                     history.clearAll()
                 }
+                // 先关闭 Popover 再退出，避免 terminate 时 AppKit 关闭它自己创建的窗口产生警告
+                onSelect()
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                     NSApplication.shared.terminate(nil)
                 }

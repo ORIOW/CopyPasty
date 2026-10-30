@@ -7,6 +7,7 @@
 
 import Foundation
 import AppKit
+import CryptoKit
 internal import Combine
 
 /// 剪贴板图片磁盘存储：图片以文件形式保存在 Application Support，避免 UserDefaults 膨胀
@@ -65,11 +66,16 @@ final class ClipboardImageStore {
 /// 剪贴板历史记录项
 struct ClipboardItem: Identifiable, Codable {
     let id: UUID
-    let content: String
+    var content: String
     let displayName: String?
     let timestamp: Date
     let itemType: ClipboardType
     let fileSize: Int64?
+    /// 敏感记录：UI 打码显示，原文加密存放
+    var isSensitive: Bool
+    var sensitivityKind: SensitivityKind?
+    /// 加密后的原文（敏感记录专用；此时 content 存原文的 SHA-256 摘要用于去重）
+    var encryptedContent: Data?
     /// 磁盘上的缩略图/原图/波形图文件名（持久化字段）
     var thumbnailFileName: String?
     var imageFileName: String?
@@ -91,18 +97,22 @@ struct ClipboardItem: Identifiable, Codable {
     /// 持久化键：图片二进制仅作旧数据迁移读取，不再写出
     enum CodingKeys: String, CodingKey {
         case id, content, displayName, timestamp, itemType, fileSize
+        case isSensitive, sensitivityKind, encryptedContent
         case thumbnailFileName, imageFileName, waveformFileName
         case legacyThumbnailData = "thumbnailData"
         case legacyImageData = "imageData"
     }
 
     /// 初始化
-    init(id: UUID = UUID(), content: String, timestamp: Date = Date(), itemType: ClipboardType = .text, thumbnailData: Data? = nil, imageData: Data? = nil, waveformData: Data? = nil, thumbnailFileName: String? = nil, imageFileName: String? = nil, waveformFileName: String? = nil, displayName: String? = nil, fileSize: Int64? = nil) {
+    init(id: UUID = UUID(), content: String, timestamp: Date = Date(), itemType: ClipboardType = .text, isSensitive: Bool = false, sensitivityKind: SensitivityKind? = nil, encryptedContent: Data? = nil, thumbnailData: Data? = nil, imageData: Data? = nil, waveformData: Data? = nil, thumbnailFileName: String? = nil, imageFileName: String? = nil, waveformFileName: String? = nil, displayName: String? = nil, fileSize: Int64? = nil) {
         self.id = id
         self.content = content
         self.displayName = displayName
         self.timestamp = timestamp
         self.itemType = itemType
+        self.isSensitive = isSensitive
+        self.sensitivityKind = sensitivityKind
+        self.encryptedContent = encryptedContent
         self.thumbnailData = thumbnailData
         self.imageData = imageData
         self.waveformData = waveformData
@@ -121,6 +131,10 @@ struct ClipboardItem: Identifiable, Codable {
         timestamp = try container.decode(Date.self, forKey: .timestamp)
         itemType = try container.decode(ClipboardType.self, forKey: .itemType)
         fileSize = try container.decodeIfPresent(Int64.self, forKey: .fileSize)
+        isSensitive = try container.decodeIfPresent(Bool.self, forKey: .isSensitive) ?? false
+        // 未知类型值（如未来版本改了文案）置 nil 而不是让整条记录解码失败
+        sensitivityKind = (try? container.decodeIfPresent(SensitivityKind.self, forKey: .sensitivityKind)) ?? nil
+        encryptedContent = try container.decodeIfPresent(Data.self, forKey: .encryptedContent)
         thumbnailFileName = try container.decodeIfPresent(String.self, forKey: .thumbnailFileName)
         imageFileName = try container.decodeIfPresent(String.self, forKey: .imageFileName)
         waveformFileName = try container.decodeIfPresent(String.self, forKey: .waveformFileName)
@@ -137,6 +151,9 @@ struct ClipboardItem: Identifiable, Codable {
         try container.encode(timestamp, forKey: .timestamp)
         try container.encode(itemType, forKey: .itemType)
         try container.encodeIfPresent(fileSize, forKey: .fileSize)
+        try container.encode(isSensitive, forKey: .isSensitive)
+        try container.encodeIfPresent(sensitivityKind, forKey: .sensitivityKind)
+        try container.encodeIfPresent(encryptedContent, forKey: .encryptedContent)
         try container.encodeIfPresent(thumbnailFileName, forKey: .thumbnailFileName)
         try container.encodeIfPresent(imageFileName, forKey: .imageFileName)
         try container.encodeIfPresent(waveformFileName, forKey: .waveformFileName)
@@ -180,8 +197,12 @@ struct ClipboardItem: Identifiable, Codable {
         Set([thumbnailFileName, imageFileName, waveformFileName].compactMap { $0 })
     }
 
-    /// 显示内容（截断过长文本）
+    /// 显示内容（截断过长文本；敏感记录打码）
     var displayContent: String {
+        if isSensitive {
+            let kindLabel = sensitivityKind?.rawValue ?? "敏感信息"
+            return "••••••••（疑似\(kindLabel)）"
+        }
         if let displayName = displayName {
             let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.isEmpty {
@@ -265,7 +286,24 @@ class ClipboardHistory: ObservableObject {
         let trimmedContent = content.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedContent.isEmpty else { return nil }
 
-        var newItem = ClipboardItem(content: trimmedContent, itemType: type, thumbnailData: thumbnailData, imageData: imageData, waveformData: waveformData, displayName: displayName, fileSize: fileSize)
+        // 敏感内容检测：命中且加密/摘要成功时打码入库，content 只存 HMAC 摘要用于去重
+        var isSensitive = false
+        var sensitivityKind: SensitivityKind? = nil
+        var storedContent = trimmedContent
+        var encryptedContent: Data? = nil
+        if type == .text || type == .other {
+            if let detected = SensitiveDetector.detect(trimmedContent),
+               let encrypted = HistoryCrypto.encrypt(trimmedContent),
+               let hmac = HistoryCrypto.hmacHex(trimmedContent) {
+                isSensitive = true
+                sensitivityKind = detected
+                storedContent = hmac
+                encryptedContent = encrypted
+            }
+        }
+
+        // 去重：明文相同或摘要相同（含重拷贝同一条敏感内容）都算同一条
+        var newItem = ClipboardItem(content: storedContent, itemType: type, isSensitive: isSensitive, sensitivityKind: sensitivityKind, encryptedContent: encryptedContent, thumbnailData: thumbnailData, imageData: imageData, waveformData: waveformData, displayName: displayName, fileSize: fileSize)
         // 先把图片落盘（失败则保留内存数据待重试），成功后再清理被去重覆盖的旧文件
         if let data = newItem.thumbnailData {
             newItem.thumbnailFileName = ClipboardImageStore.shared.save(data, id: newItem.id, kind: "thumbnail")
@@ -286,7 +324,7 @@ class ClipboardHistory: ObservableObject {
             }
         }
 
-        if let existingIndex = items.firstIndex(where: { $0.content == trimmedContent }) {
+        if let existingIndex = items.firstIndex(where: { $0.content == trimmedContent || $0.content == storedContent }) {
             deleteImageFiles(of: items.remove(at: existingIndex))
         }
         items.insert(newItem, at: 0)
@@ -297,6 +335,20 @@ class ClipboardHistory: ObservableObject {
 
         saveHistory()
         return newItem
+    }
+
+    /// 取消打码：解密并恢复原文显示；解密失败（如密钥已更换）返回 false
+    @discardableResult
+    func unmaskItem(_ item: ClipboardItem) -> Bool {
+        guard item.isSensitive, let encryptedContent = item.encryptedContent,
+              let plaintext = HistoryCrypto.decrypt(encryptedContent),
+              let index = items.firstIndex(where: { $0.id == item.id }) else { return false }
+        items[index].content = plaintext
+        items[index].isSensitive = false
+        items[index].sensitivityKind = nil
+        items[index].encryptedContent = nil
+        saveHistory()
+        return true
     }
 
     /// 为已有记录原地补充媒体图片（音频波形/视频缩略图）；记录已被删除时静默放弃
@@ -331,6 +383,14 @@ class ClipboardHistory: ObservableObject {
 
     /// 复制内容到剪贴板
     func copyToClipboard(_ item: ClipboardItem) {
+        // 敏感记录：先解密出原文再动剪贴板；解密失败则保持剪贴板原样
+        var payload = item.content
+        if item.isSensitive {
+            guard let encryptedContent = item.encryptedContent,
+                  let plaintext = HistoryCrypto.decrypt(encryptedContent) else { return }
+            payload = plaintext
+        }
+
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
 
@@ -361,7 +421,7 @@ class ClipboardHistory: ObservableObject {
         }
 
         if !wrote {
-            pasteboard.setString(item.content, forType: .string)
+            pasteboard.setString(payload, forType: .string)
         }
         onPasteboardWrite?()
     }

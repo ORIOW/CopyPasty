@@ -340,11 +340,11 @@ struct AboutView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Version \(Self.versionText)")
                         .font(.system(size: 10, weight: .semibold))
-                    Text("✅ 音频文件记录显示波形图")
+                    Text("✅ 敏感信息自动打码与加密存储")
+                        .font(.system(size: 10))
+                    Text("✅ 音频波形图 / 视频缩略图预览")
                         .font(.system(size: 10))
                     Text("🔧 修复网址被误识别为文件的问题")
-                        .font(.system(size: 10))
-                    Text("🔧 浅色模式下图片缩略图更清晰")
                         .font(.system(size: 10))
                 }
                 .foregroundStyle(.secondary)
@@ -443,6 +443,8 @@ struct HistoryView: View {
                     onSelect()
                 }, onDelete: {
                     history.removeItem(item)
+                }, onUnmask: { target in
+                    history.unmaskItem(target)
                 })
             }
         }
@@ -508,28 +510,66 @@ struct HistoryRowWrapper: View {
     let item: ClipboardItem
     let onSelect: () -> Void
     let onDelete: () -> Void
+    let onUnmask: (ClipboardItem) -> Bool
     @State private var isClicked = false
+    @State private var showUnmaskConfirm = false
+    @State private var unmaskFailed = false
 
     /// 视图主体
     var body: some View {
-        HistoryRow(item: item, isClicked: isClicked)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                withAnimation(.easeInOut(duration: 0.15)) {
-                    isClicked = true
+        Group {
+            if showUnmaskConfirm {
+                unmaskConfirmView
+            } else {
+                HistoryRow(item: item, isClicked: isClicked, onQuestionMark: {
+                    showUnmaskConfirm = true
+                })
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        isClicked = true
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                        isClicked = false
+                        onSelect()
+                    }
                 }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                    isClicked = false
-                    onSelect()
+                .contextMenu {
+                    Button(role: .destructive) {
+                        onDelete()
+                    } label: {
+                        Label("删除", systemImage: "trash")
+                    }
                 }
             }
-            .contextMenu {
-                Button(role: .destructive) {
-                    onDelete()
-                } label: {
-                    Label("删除", systemImage: "trash")
+        }
+    }
+
+    /// 取消打码确认（行内展开：外层面板本身是 Popover，嵌套弹窗会被系统自动关闭）
+    private var unmaskConfirmView: some View {
+        HStack(spacing: 10) {
+            Text(unmaskFailed ? "无法解密（密钥可能已更换）" : "不是敏感信息？")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(unmaskFailed ? Color.red : Color.primary)
+            Spacer()
+            if !unmaskFailed {
+                Button("取消打码") {
+                    if onUnmask(item) {
+                        showUnmaskConfirm = false
+                    } else {
+                        unmaskFailed = true
+                    }
                 }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
             }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+        )
     }
 }
 
@@ -537,13 +577,18 @@ struct HistoryRowWrapper: View {
 struct HistoryRow: View {
     let item: ClipboardItem
     let isClicked: Bool
+    var onQuestionMark: () -> Void = {}
 
     /// 视图主体
     var body: some View {
         // 波形图只解码一次，供图片分支与 lineLimit 判断共用
         let waveform = item.waveformImage
         return HStack(alignment: .center, spacing: 10) {
-            if let waveform {
+            if item.isSensitive {
+                Image(systemName: "lock.fill")
+                    .foregroundStyle(.orange)
+                    .frame(width: 20)
+            } else if let waveform {
                 // 音频文件：显示整条波形图
                 Image(nsImage: waveform)
                     .resizable()
@@ -580,6 +625,15 @@ struct HistoryRow: View {
             Text(item.sizeOrTypeDisplay)
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
+
+            if item.isSensitive {
+                Button(action: onQuestionMark) {
+                    Image(systemName: "questionmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("不是敏感信息？")
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)

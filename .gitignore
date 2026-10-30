@@ -1,0 +1,15 @@
+# macOS
+.DS_Store
+
+# Xcode
+DerivedData/
+build/
+*.xcuserstate
+xcuserdata/
+
+# 编辑器残留
+*.swp
+
+# SwiftPM
+.build/
+Package.resolved

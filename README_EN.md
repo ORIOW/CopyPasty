@@ -75,3 +75,7 @@ CopyPasty/
 ## Changelog
 
 See [CHANGELOG.md](CHANGELOG.md). Version format: `major.minor.patch.YYMMDD_stage`.
+
+## License
+
+[MIT](LICENSE) © 2026 Deng Jiawei

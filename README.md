@@ -75,3 +75,7 @@ CopyPasty/
 ## 版本历史
 
 见 [CHANGELOG.md](CHANGELOG.md)。版本号规则：`主.子.阶段.YYMMDD_阶段名`。
+
+## 许可证
+
+[MIT](LICENSE) © 2026 邓家炜

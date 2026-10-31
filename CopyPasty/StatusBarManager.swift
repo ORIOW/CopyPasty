@@ -237,6 +237,10 @@ struct SettingsView: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                Text("🔐 首次加密时 macOS 可能弹出 1–2 次钥匙串授权框（读取与写入各一次），点击「始终允许」后同一构建不再出现，App 更新后可能再次询问。该授权仅针对 CopyPasty 自行创建的那一条加密密钥条目，不会访问你钥匙串中的其他任何内容。")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Toggle(isOn: $clearOnExit) {
@@ -369,6 +373,8 @@ struct AboutView: View {
                     Text("✅ 音频波形图 / 视频缩略图预览")
                         .font(.system(size: 10))
                     Text("✅ 深浅色自动跟随系统")
+                        .font(.system(size: 10))
+                    Text("🔐 首次加密可能弹出钥匙串授权（1–2 次），仅涉及 CopyPasty 自建的密钥条目，点「始终允许」即可")
                         .font(.system(size: 10))
                 }
                 .foregroundStyle(.secondary)

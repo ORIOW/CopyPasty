@@ -553,6 +553,16 @@ struct HistoryRowWrapper: View {
                 .foregroundStyle(unmaskFailed ? Color.red : Color.primary)
             Spacer()
             if !unmaskFailed {
+                // 返回打码状态
+                Button {
+                    showUnmaskConfirm = false
+                } label: {
+                    Image(systemName: "arrow.uturn.backward.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("返回")
+
                 Button("取消打码") {
                     if onUnmask(item) {
                         showUnmaskConfirm = false

@@ -295,7 +295,11 @@ class ClipboardHistory: ObservableObject {
             #if DEBUG
             NSLog("CopyPasty: 文本记录待检测，长度 %d", trimmedContent.count)
             #endif
-            if let detected = SensitiveDetector.detect(trimmedContent) {
+            let detected = SensitiveDetector.detect(trimmedContent)
+            #if DEBUG
+            NSLog("CopyPasty: 检测结束，命中=%d", detected != nil ? 1 : 0)
+            #endif
+            if let detected = detected {
                 if let encrypted = HistoryCrypto.encrypt(trimmedContent),
                    let hmac = HistoryCrypto.hmacHex(trimmedContent) {
                     isSensitive = true
@@ -309,6 +313,10 @@ class ClipboardHistory: ObservableObject {
                     // 加密/摘要失败（如钥匙串不可用）时降级为明文存储，日志便于发现该情况
                     NSLog("CopyPasty: 敏感内容加密失败，降级为明文存储，类型 \(detected.rawValue)")
                 }
+            } else {
+                #if DEBUG
+                NSLog("CopyPasty: 未命中敏感检测 %@", SensitiveDetector.debugStats(trimmedContent))
+                #endif
             }
         }
 
@@ -344,6 +352,9 @@ class ClipboardHistory: ObservableObject {
         }
 
         saveHistory()
+        #if DEBUG
+        NSLog("CopyPasty: 记录已入库 sensitive=%d", isSensitive ? 1 : 0)
+        #endif
         return newItem
     }
 

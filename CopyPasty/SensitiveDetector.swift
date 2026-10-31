@@ -28,6 +28,16 @@ enum SensitiveDetector {
         "npm_"                                  // npm
     ]
 
+    /// 诊断用统计（不含原文），用于排查漏检
+    static func debugStats(_ text: String) -> String {
+        let collapsed = text.filter { !$0.isWhitespace }
+        let digits = collapsed.filter { $0.isASCII && $0.isNumber }.count
+        let distinct = Set(collapsed).count
+        let digitRatio = collapsed.isEmpty ? 0 : Double(digits) / Double(collapsed.count)
+        let entropyRatio = distinct > 1 ? shannonEntropyPerChar(collapsed) / log2(Double(distinct)) : 0
+        return "len=\(text.count) collapsed=\(collapsed.count) distinct=\(distinct) digitRatio=\(String(format: "%.2f", digitRatio)) entropyRatio=\(String(format: "%.2f", entropyRatio)) hasWhitespace=\(text.contains(where: { $0.isWhitespace }))"
+    }
+
     /// 检测文本是否疑似敏感内容，返回类型
     static func detect(_ text: String) -> SensitivityKind? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -169,57 +179,67 @@ enum HistoryCrypto {
         return auth.map { String(format: "%02x", $0) }.joined()
     }
 
-    /// 是否使用 data protection 钥匙串；缺 entitlement（-34018）时自动降级为传统钥匙串
-    private static var usesDataProtectionKeychain = true
-
-    /// 从钥匙串加载密钥，首次使用时生成
+    /// 从钥匙串加载密钥，首次使用时生成。
+    /// 历史构建可能把密钥写在 data protection 或传统钥匙串之一，两处都找；
+    /// 保存时两处都试（不同签名形态可用的钥匙串不同），避免共享可变状态导致静默失败。
     private static var currentKey: SymmetricKey? {
         if let cachedKey { return cachedKey }
-        if let existing = loadKeyFromKeychain() {
-            cachedKey = existing
-            return existing
+        for useDP in [true, false] {
+            if let existing = loadKeyFromKeychain(useDP: useDP) {
+                cachedKey = existing
+                return existing
+            }
         }
         let newKey = SymmetricKey(size: .bits256)
-        guard saveKeyToKeychain(newKey) else { return nil }
-        cachedKey = newKey
-        return newKey
+        for useDP in [true, false] {
+            if saveKeyToKeychain(newKey, useDP: useDP) {
+                cachedKey = newKey
+                return newKey
+            }
+        }
+        return nil
     }
 
-    private static func keychainQuery() -> [String: Any] {
+    private static func keychainQuery(useDP: Bool) -> [String: Any] {
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: "PD.CopyPasty",
             kSecAttrAccount as String: "history-encryption-key"
         ]
-        if usesDataProtectionKeychain {
+        if useDP {
             query[kSecUseDataProtectionKeychain as String] = true
         }
         return query
     }
 
-    private static func loadKeyFromKeychain() -> SymmetricKey? {
+    private static func loadKeyFromKeychain(useDP: Bool) -> SymmetricKey? {
+        var query = keychainQuery(useDP: useDP)
+        // 必须显式要求返回数据，否则传统钥匙串返回的类型无法转成 Data
+        query[kSecReturnData as String] = true
         var item: CFTypeRef?
-        let status = SecItemCopyMatching(keychainQuery() as CFDictionary, &item)
-        guard status == errSecSuccess, let keyData = item as? Data else { return nil }
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        guard status == errSecSuccess, let keyData = item as? Data else {
+            #if DEBUG
+            if status != errSecItemNotFound {
+                NSLog("CopyPasty: 钥匙串读取失败 useDP=%d status=%d", useDP ? 1 : 0, status)
+            }
+            #endif
+            return nil
+        }
         return SymmetricKey(data: keyData)
     }
 
-    private static func saveKeyToKeychain(_ key: SymmetricKey) -> Bool {
+    private static func saveKeyToKeychain(_ key: SymmetricKey, useDP: Bool) -> Bool {
         let keyData = key.withUnsafeBytes { Data($0) }
-        var attributes = keychainQuery()
+        var attributes = keychainQuery(useDP: useDP)
         attributes[kSecValueData as String] = keyData
         attributes[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlocked
         let status = SecItemAdd(attributes as CFDictionary, nil)
         if status == errSecSuccess { return true }
-        // 已存在（极端并发）时尝试再读一次
-        if status == errSecDuplicateItem { return loadKeyFromKeychain() != nil }
-        // 当前签名缺少 data protection 权限（如临时签名的开发构建），降级为传统钥匙串重试
-        if status == errSecMissingEntitlement, usesDataProtectionKeychain {
-            usesDataProtectionKeychain = false
-            return saveKeyToKeychain(key)
-        }
+        // 已存在（其他会话先写入）时回读
+        if status == errSecDuplicateItem { return loadKeyFromKeychain(useDP: useDP) != nil }
         #if DEBUG
-        NSLog("CopyPasty: 钥匙串 SecItemAdd 失败 status=%d", status)
+        NSLog("CopyPasty: 钥匙串 SecItemAdd 失败 useDP=%d status=%d", useDP ? 1 : 0, status)
         #endif
         return false
     }

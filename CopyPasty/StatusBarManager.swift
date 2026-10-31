@@ -445,6 +445,8 @@ struct HistoryView: View {
                     history.removeItem(item)
                 }, onUnmask: { target in
                     history.unmaskItem(target)
+                }, onLock: {
+                    history.reencryptItem(item)
                 })
             }
         }
@@ -511,6 +513,7 @@ struct HistoryRowWrapper: View {
     let onSelect: () -> Void
     let onDelete: () -> Void
     let onUnmask: (ClipboardItem) -> Bool
+    let onLock: () -> Void
     @State private var isClicked = false
     @State private var showUnmaskConfirm = false
     @State private var unmaskFailed = false
@@ -523,7 +526,7 @@ struct HistoryRowWrapper: View {
             } else {
                 HistoryRow(item: item, isClicked: isClicked, onQuestionMark: {
                     showUnmaskConfirm = true
-                })
+                }, onLock: onLock)
                 .contentShape(Rectangle())
                 .onTapGesture {
                     withAnimation(.easeInOut(duration: 0.15)) {
@@ -588,6 +591,7 @@ struct HistoryRow: View {
     let item: ClipboardItem
     let isClicked: Bool
     var onQuestionMark: () -> Void = {}
+    var onLock: () -> Void = {}
 
     /// 视图主体
     var body: some View {
@@ -643,6 +647,14 @@ struct HistoryRow: View {
                 }
                 .buttonStyle(.plain)
                 .help("不是敏感信息？")
+            } else if item.itemType == .text || item.itemType == .other || item.itemType == .url {
+                // 文本记录可手动恢复打码
+                Button(action: onLock) {
+                    Image(systemName: "lock.fill")
+                        .foregroundStyle(.secondary)
+                    }
+                .buttonStyle(.plain)
+                .help("打码此记录")
             }
         }
         .padding(.horizontal, 12)

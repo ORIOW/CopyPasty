@@ -358,6 +358,19 @@ class ClipboardHistory: ObservableObject {
         return newItem
     }
 
+    /// 重新加密并打码记录（取消打码后如需再次隐藏）
+    func reencryptItem(_ item: ClipboardItem) {
+        guard !item.isSensitive, item.itemType == .text || item.itemType == .other || item.itemType == .url,
+              let encrypted = HistoryCrypto.encrypt(item.content),
+              let hmac = HistoryCrypto.hmacHex(item.content),
+              let index = items.firstIndex(where: { $0.id == item.id }) else { return }
+        items[index].content = hmac
+        items[index].isSensitive = true
+        items[index].sensitivityKind = SensitiveDetector.detect(item.content) ?? .password
+        items[index].encryptedContent = encrypted
+        saveHistory()
+    }
+
     /// 取消打码：解密并恢复原文显示；解密失败（如密钥已更换）返回 false
     @discardableResult
     func unmaskItem(_ item: ClipboardItem) -> Bool {

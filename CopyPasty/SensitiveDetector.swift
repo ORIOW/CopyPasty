@@ -169,6 +169,9 @@ enum HistoryCrypto {
         return auth.map { String(format: "%02x", $0) }.joined()
     }
 
+    /// 是否使用 data protection 钥匙串；缺 entitlement（-34018）时自动降级为传统钥匙串
+    private static var usesDataProtectionKeychain = true
+
     /// 从钥匙串加载密钥，首次使用时生成
     private static var currentKey: SymmetricKey? {
         if let cachedKey { return cachedKey }
@@ -183,12 +186,15 @@ enum HistoryCrypto {
     }
 
     private static func keychainQuery() -> [String: Any] {
-        [
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: "PD.CopyPasty",
-            kSecAttrAccount as String: "history-encryption-key",
-            kSecUseDataProtectionKeychain as String: true
+            kSecAttrAccount as String: "history-encryption-key"
         ]
+        if usesDataProtectionKeychain {
+            query[kSecUseDataProtectionKeychain as String] = true
+        }
+        return query
     }
 
     private static func loadKeyFromKeychain() -> SymmetricKey? {
@@ -207,6 +213,14 @@ enum HistoryCrypto {
         if status == errSecSuccess { return true }
         // 已存在（极端并发）时尝试再读一次
         if status == errSecDuplicateItem { return loadKeyFromKeychain() != nil }
+        // 当前签名缺少 data protection 权限（如临时签名的开发构建），降级为传统钥匙串重试
+        if status == errSecMissingEntitlement, usesDataProtectionKeychain {
+            usesDataProtectionKeychain = false
+            return saveKeyToKeychain(key)
+        }
+        #if DEBUG
+        NSLog("CopyPasty: 钥匙串 SecItemAdd 失败 status=%d", status)
+        #endif
         return false
     }
 }

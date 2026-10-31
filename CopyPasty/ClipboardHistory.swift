@@ -292,13 +292,23 @@ class ClipboardHistory: ObservableObject {
         var storedContent = trimmedContent
         var encryptedContent: Data? = nil
         if type == .text || type == .other {
-            if let detected = SensitiveDetector.detect(trimmedContent),
-               let encrypted = HistoryCrypto.encrypt(trimmedContent),
-               let hmac = HistoryCrypto.hmacHex(trimmedContent) {
-                isSensitive = true
-                sensitivityKind = detected
-                storedContent = hmac
-                encryptedContent = encrypted
+            #if DEBUG
+            NSLog("CopyPasty: 文本记录待检测，长度 %d", trimmedContent.count)
+            #endif
+            if let detected = SensitiveDetector.detect(trimmedContent) {
+                if let encrypted = HistoryCrypto.encrypt(trimmedContent),
+                   let hmac = HistoryCrypto.hmacHex(trimmedContent) {
+                    isSensitive = true
+                    sensitivityKind = detected
+                    storedContent = hmac
+                    encryptedContent = encrypted
+                    #if DEBUG
+                    NSLog("CopyPasty: 敏感内容已加密入库，类型 \(detected.rawValue)")
+                    #endif
+                } else {
+                    // 加密/摘要失败（如钥匙串不可用）时降级为明文存储，日志便于发现该情况
+                    NSLog("CopyPasty: 敏感内容加密失败，降级为明文存储，类型 \(detected.rawValue)")
+                }
             }
         }
 

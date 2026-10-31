@@ -32,9 +32,12 @@ enum SensitiveDetector {
     static func detect(_ text: String) -> SensitivityKind? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed.count <= 4096 else { return nil }
-        if detectBankCard(trimmed) { return .bankCard }
-        if detectSecretKey(trimmed) { return .secretKey }
-        if detectPassword(trimmed) { return .password }
+        // 拷贝时常混入换行/空格（终端折行、表格复制），折叠空白后再判断；
+        // 命中时加密与去重仍用原文，取消打码后恢复原样
+        let collapsed = trimmed.filter { !$0.isWhitespace }
+        if detectBankCard(collapsed) { return .bankCard }
+        if detectSecretKey(collapsed) { return .secretKey }
+        if detectPassword(collapsed) { return .password }
         return nil
     }
 
@@ -63,22 +66,24 @@ enum SensitiveDetector {
         return sum % 10 == 0
     }
 
-    /// 密钥：私钥块、已知前缀、长十六进制串、高熵随机串
+    /// 密钥：私钥块、已知前缀、长十六进制串、高熵随机串（传入文本已折叠空白）
     private static func detectSecretKey(_ text: String) -> Bool {
-        if text.contains("PRIVATE KEY") { return true }
+        if text.contains("PRIVATE KEY") || text.contains("PRIVATEKEY") { return true }
         for prefix in secretPrefixes where text.hasPrefix(prefix) { return true }
 
         // 单个无空白的 token 才按随机串判断；排除 URL（含 ://）
         guard !text.contains(where: { $0.isWhitespace }), !text.contains("://") else { return false }
         // 32 位以上纯 ASCII 十六进制（API 密钥、证书指纹等）
         if text.count >= 32, text.allSatisfy({ $0.isASCII && $0.isHexDigit }) { return true }
-        // 24 字符以上、至少 3 类字符、含数字、字符分布接近均匀的随机串
-        // （熵密度上界是 log2(不同字符数)，固定阈值对短串数学上不可达，故用比率 + 不同字符数下限）
-        // 要求含数字：真实 API 密钥几乎必有数字，可排除文件路径等纯字母混排文本
+        // 24 字符以上、至少 3 类字符、字符分布较均匀的随机串
+        // （熵密度上界是 log2(不同字符数)；hex 类密钥字母表仅 16 字符，比值天然偏低，
+        //   故阈值取 0.85 并叠加数字占比判据——随机密钥数字占比 ~15-55%，
+        //   而拼接单词/SQL 等文本折叠后 ~4%，这是区分两者的有效特征）
         let distinct = distinctCharacterCount(text)
+        let digitCount = text.filter { $0.isASCII && $0.isNumber }.count
         if text.count >= 24, characterClassCount(text) >= 3, distinct >= 16,
-           text.contains(where: { $0.isASCII && $0.isNumber }),
-           shannonEntropyPerChar(text) / log2(Double(distinct)) >= 0.9 {
+           Double(digitCount) / Double(text.count) >= 0.12,
+           shannonEntropyPerChar(text) / log2(Double(distinct)) >= 0.85 {
             return true
         }
         return false

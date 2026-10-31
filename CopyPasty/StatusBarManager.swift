@@ -197,6 +197,7 @@ struct SettingsView: View {
     let onOpenOnboarding: () -> Void
     @AppStorage("launchAtLogin") private var launchAtLogin = false
     @AppStorage("clearOnExit") private var clearOnExit = false
+    @AppStorage("encryptSensitive") private var encryptSensitive = true
     @State private var isRestartButtonPressed = false
 
     var body: some View {
@@ -213,6 +214,29 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Toggle(isOn: $encryptSensitive) {
+                    HStack {
+                        Text("敏感内容加密")
+                            .multilineTextAlignment(.leading)
+                        Spacer()
+                    }
+                }
+                .toggleStyle(.switch)
+                .onChange(of: encryptSensitive) { _, newValue in
+                    // 切换时对存量记录同步生效，保持列表状态与设置一致
+                    if newValue {
+                        history.encryptAll()
+                    } else {
+                        history.decryptAll()
+                    }
+                }
+                Text("开启后，检测为密码、密钥、银行卡号的拷贝记录会自动打码，原文用 AES-GCM 加密后存储，加解密密钥保存在系统钥匙串中；点击记录仍可正常复制，也可用记录末尾的按钮打码/取消打码。关闭后按原文存储，现有已打码记录也会恢复明文。")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Toggle(isOn: $clearOnExit) {
@@ -340,11 +364,11 @@ struct AboutView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Version \(Self.versionText)")
                         .font(.system(size: 10, weight: .semibold))
-                    Text("✅ 敏感信息自动打码与加密存储")
+                    Text("✅ 敏感内容检测：自动打码 + AES-GCM 加密，可在设置中开关")
                         .font(.system(size: 10))
                     Text("✅ 音频波形图 / 视频缩略图预览")
                         .font(.system(size: 10))
-                    Text("🔧 修复网址被误识别为文件的问题")
+                    Text("✅ 深浅色自动跟随系统")
                         .font(.system(size: 10))
                 }
                 .foregroundStyle(.secondary)

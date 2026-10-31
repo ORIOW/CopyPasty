@@ -287,11 +287,12 @@ class ClipboardHistory: ObservableObject {
         guard !trimmedContent.isEmpty else { return nil }
 
         // 敏感内容检测：命中且加密/摘要成功时打码入库，content 只存 HMAC 摘要用于去重
+        // （设置页可整体关闭；关闭时新增记录按原文存储）
         var isSensitive = false
         var sensitivityKind: SensitivityKind? = nil
         var storedContent = trimmedContent
         var encryptedContent: Data? = nil
-        if type == .text || type == .other {
+        if (type == .text || type == .other), encryptionEnabled {
             #if DEBUG
             NSLog("CopyPasty: 文本记录待检测，长度 %d", trimmedContent.count)
             #endif
@@ -356,6 +357,45 @@ class ClipboardHistory: ObservableObject {
         NSLog("CopyPasty: 记录已入库 sensitive=%d", isSensitive ? 1 : 0)
         #endif
         return newItem
+    }
+
+    /// 敏感内容加密开关（与设置页 @AppStorage 共用同一 key，默认开启）
+    var encryptionEnabled: Bool {
+        UserDefaults.standard.object(forKey: "encryptSensitive") == nil
+            ? true
+            : UserDefaults.standard.bool(forKey: "encryptSensitive")
+    }
+
+    /// 批量恢复明文（设置中关闭加密时调用）
+    func decryptAll() {
+        var changed = false
+        for index in items.indices where items[index].isSensitive {
+            guard let encryptedContent = items[index].encryptedContent,
+                  let plaintext = HistoryCrypto.decrypt(encryptedContent) else { continue }
+            items[index].content = plaintext
+            items[index].isSensitive = false
+            items[index].sensitivityKind = nil
+            items[index].encryptedContent = nil
+            changed = true
+        }
+        if changed { saveHistory() }
+    }
+
+    /// 批量扫描并加密现有明文记录（设置中开启加密时调用）
+    func encryptAll() {
+        var changed = false
+        for index in items.indices where !items[index].isSensitive {
+            guard items[index].itemType == .text || items[index].itemType == .other || items[index].itemType == .url,
+                  let kind = SensitiveDetector.detect(items[index].content),
+                  let encrypted = HistoryCrypto.encrypt(items[index].content),
+                  let hmac = HistoryCrypto.hmacHex(items[index].content) else { continue }
+            items[index].content = hmac
+            items[index].isSensitive = true
+            items[index].sensitivityKind = kind
+            items[index].encryptedContent = encrypted
+            changed = true
+        }
+        if changed { saveHistory() }
     }
 
     /// 重新加密并打码记录（取消打码后如需再次隐藏）

@@ -51,7 +51,7 @@ enum SensitiveDetector {
         return nil
     }
 
-    /// 银行卡号：13-19 位 ASCII 数字（允许空格/短横线分隔），通过 Luhn 校验
+    /// 银行卡号：13-19 位 ASCII 数字（传入文本已折叠空白，短横线分隔仍合法），通过 Luhn 校验
     private static func detectBankCard(_ text: String) -> Bool {
         let digits = text.filter { $0.isASCII && $0.isNumber }
         guard digits.count >= 13, digits.count <= 19 else { return false }
@@ -76,13 +76,25 @@ enum SensitiveDetector {
         return sum % 10 == 0
     }
 
-    /// 密钥：私钥块、已知前缀、长十六进制串、高熵随机串（传入文本已折叠空白）
+    /// 密钥：私钥块、已知前缀（含 KEY=sk-xxx 配置行形态）、JWT、长十六进制串、高熵随机串（传入文本已折叠空白）
     private static func detectSecretKey(_ text: String) -> Bool {
         if text.contains("PRIVATE KEY") || text.contains("PRIVATEKEY") { return true }
-        for prefix in secretPrefixes where text.hasPrefix(prefix) { return true }
 
-        // 单个无空白的 token 才按随机串判断；排除 URL（含 ://）
-        guard !text.contains(where: { $0.isWhitespace }), !text.contains("://") else { return false }
+        // 单个无空白的 token 才按随机串判断；排除 URL（含 ://）与 data URI
+        guard !text.contains(where: { $0.isWhitespace }), !text.contains("://"), !text.hasPrefix("data:") else { return false }
+        // 已知前缀：对整段及 =/: 分隔后的 token 各查一次（覆盖 OPENAI_API_KEY=sk-xxx 形态）
+        var prefixTargets = [text]
+        for separator in ["=", ":"] {
+            let parts = text.split(separator: Character(separator), maxSplits: 1, omittingEmptySubsequences: false)
+            if parts.count > 1 {
+                prefixTargets.append(String(parts[1]).trimmingCharacters(in: .whitespaces))
+            }
+        }
+        for target in prefixTargets {
+            for prefix in secretPrefixes where target.hasPrefix(prefix) { return true }
+        }
+        // JWT：eyJ 开头 + 至少两段点分
+        if text.hasPrefix("eyJ"), text.components(separatedBy: ".").count >= 3 { return true }
         // 32 位以上纯 ASCII 十六进制（API 密钥、证书指纹等）
         if text.count >= 32, text.allSatisfy({ $0.isASCII && $0.isHexDigit }) { return true }
         // 24 字符以上、至少 3 类字符、字符分布较均匀的随机串
@@ -192,9 +204,10 @@ enum HistoryCrypto {
         }
         let newKey = SymmetricKey(size: .bits256)
         for useDP in [true, false] {
-            if saveKeyToKeychain(newKey, useDP: useDP) {
-                cachedKey = newKey
-                return newKey
+            // duplicate 时回读的是钥匙串中实际存储的密钥，必须用它而非 newKey
+            if let savedKey = saveKeyToKeychain(newKey, useDP: useDP) {
+                cachedKey = savedKey
+                return savedKey
             }
         }
         return nil
@@ -229,18 +242,18 @@ enum HistoryCrypto {
         return SymmetricKey(data: keyData)
     }
 
-    private static func saveKeyToKeychain(_ key: SymmetricKey, useDP: Bool) -> Bool {
+    private static func saveKeyToKeychain(_ key: SymmetricKey, useDP: Bool) -> SymmetricKey? {
         let keyData = key.withUnsafeBytes { Data($0) }
         var attributes = keychainQuery(useDP: useDP)
         attributes[kSecValueData as String] = keyData
         attributes[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlocked
         let status = SecItemAdd(attributes as CFDictionary, nil)
-        if status == errSecSuccess { return true }
-        // 已存在（其他会话先写入）时回读
-        if status == errSecDuplicateItem { return loadKeyFromKeychain(useDP: useDP) != nil }
+        if status == errSecSuccess { return key }
+        // 已存在（其他会话先写入）时回读实际存储的密钥
+        if status == errSecDuplicateItem { return loadKeyFromKeychain(useDP: useDP) }
         #if DEBUG
-        NSLog("CopyPasty: 钥匙串 SecItemAdd 失败 useDP=%d status=%d", useDP ? 1 : 0, status)
+        NSLog("CopyPasty: 钥匙串读取失败 useDP=%ld status=%d", useDP ? 1 : 0, status)
         #endif
-        return false
+        return nil
     }
 }

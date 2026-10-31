@@ -74,7 +74,7 @@ struct ClipboardItem: Identifiable, Codable {
     /// 敏感记录：UI 打码显示，原文加密存放
     var isSensitive: Bool
     var sensitivityKind: SensitivityKind?
-    /// 加密后的原文（敏感记录专用；此时 content 存原文的 SHA-256 摘要用于去重）
+    /// 加密后的原文（敏感记录专用；此时 content 存原文的 HMAC-SHA256 摘要用于去重）
     var encryptedContent: Data?
     /// 磁盘上的缩略图/原图/波形图文件名（持久化字段）
     var thumbnailFileName: String?
@@ -294,7 +294,7 @@ class ClipboardHistory: ObservableObject {
         var encryptedContent: Data? = nil
         if (type == .text || type == .other), encryptionEnabled {
             #if DEBUG
-            NSLog("CopyPasty: 文本记录待检测，长度 %d", trimmedContent.count)
+            NSLog("CopyPasty: 文本记录待检测，长度 %ld", trimmedContent.count)
             #endif
             let detected = SensitiveDetector.detect(trimmedContent)
             #if DEBUG
@@ -321,7 +321,8 @@ class ClipboardHistory: ObservableObject {
             }
         }
 
-        // 去重：明文相同或摘要相同（含重拷贝同一条敏感内容）都算同一条
+        // 去重：明文相同或摘要相同（含重拷贝同一条敏感内容）都算同一条；
+        // 明文与已打码记录比对需解密（HMAC 不可逆），条数上限 20，成本可忽略
         var newItem = ClipboardItem(content: storedContent, itemType: type, isSensitive: isSensitive, sensitivityKind: sensitivityKind, encryptedContent: encryptedContent, thumbnailData: thumbnailData, imageData: imageData, waveformData: waveformData, displayName: displayName, fileSize: fileSize)
         // 先把图片落盘（失败则保留内存数据待重试），成功后再清理被去重覆盖的旧文件
         if let data = newItem.thumbnailData {
@@ -343,7 +344,12 @@ class ClipboardHistory: ObservableObject {
             }
         }
 
-        if let existingIndex = items.firstIndex(where: { $0.content == trimmedContent || $0.content == storedContent }) {
+        if let existingIndex = items.firstIndex(where: { item in
+            if item.content == trimmedContent || item.content == storedContent { return true }
+            guard item.isSensitive, let encrypted = item.encryptedContent,
+                  let plaintext = HistoryCrypto.decrypt(encrypted) else { return false }
+            return plaintext == trimmedContent
+        }) {
             deleteImageFiles(of: items.remove(at: existingIndex))
         }
         items.insert(newItem, at: 0)
@@ -354,7 +360,7 @@ class ClipboardHistory: ObservableObject {
 
         saveHistory()
         #if DEBUG
-        NSLog("CopyPasty: 记录已入库 sensitive=%d", isSensitive ? 1 : 0)
+        NSLog("CopyPasty: 记录已入库 sensitive=%ld", isSensitive ? 1 : 0)
         #endif
         return newItem
     }
@@ -385,7 +391,7 @@ class ClipboardHistory: ObservableObject {
     func encryptAll() {
         var changed = false
         for index in items.indices where !items[index].isSensitive {
-            guard items[index].itemType == .text || items[index].itemType == .other || items[index].itemType == .url,
+            guard items[index].itemType == .text || items[index].itemType == .other,
                   let kind = SensitiveDetector.detect(items[index].content),
                   let encrypted = HistoryCrypto.encrypt(items[index].content),
                   let hmac = HistoryCrypto.hmacHex(items[index].content) else { continue }
@@ -400,13 +406,13 @@ class ClipboardHistory: ObservableObject {
 
     /// 重新加密并打码记录（取消打码后如需再次隐藏）
     func reencryptItem(_ item: ClipboardItem) {
-        guard !item.isSensitive, item.itemType == .text || item.itemType == .other || item.itemType == .url,
+        guard !item.isSensitive, item.itemType == .text || item.itemType == .other,
               let encrypted = HistoryCrypto.encrypt(item.content),
               let hmac = HistoryCrypto.hmacHex(item.content),
               let index = items.firstIndex(where: { $0.id == item.id }) else { return }
         items[index].content = hmac
         items[index].isSensitive = true
-        items[index].sensitivityKind = SensitiveDetector.detect(item.content) ?? .password
+        items[index].sensitivityKind = SensitiveDetector.detect(item.content)
         items[index].encryptedContent = encrypted
         saveHistory()
     }
@@ -455,13 +461,14 @@ class ClipboardHistory: ObservableObject {
         saveHistory()
     }
 
-    /// 复制内容到剪贴板
-    func copyToClipboard(_ item: ClipboardItem) {
+    /// 复制内容到剪贴板；敏感记录解密失败时返回 false（剪贴板保持原样）
+    @discardableResult
+    func copyToClipboard(_ item: ClipboardItem) -> Bool {
         // 敏感记录：先解密出原文再动剪贴板；解密失败则保持剪贴板原样
         var payload = item.content
         if item.isSensitive {
             guard let encryptedContent = item.encryptedContent,
-                  let plaintext = HistoryCrypto.decrypt(encryptedContent) else { return }
+                  let plaintext = HistoryCrypto.decrypt(encryptedContent) else { return false }
             payload = plaintext
         }
 
@@ -498,6 +505,7 @@ class ClipboardHistory: ObservableObject {
             pasteboard.setString(payload, forType: .string)
         }
         onPasteboardWrite?()
+        return true
     }
 
     /// 删除记录关联的图片文件

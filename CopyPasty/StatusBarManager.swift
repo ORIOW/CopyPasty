@@ -469,8 +469,10 @@ struct HistoryView: View {
         VStack(spacing: 1) {
             ForEach(history.items) { item in
                 HistoryRowWrapper(item: item, onSelect: {
-                    history.copyToClipboard(item)
-                    onSelect()
+                    // 解密失败等复制不成功时保持面板打开，让用户看到没有复制成功
+                    if history.copyToClipboard(item) {
+                        onSelect()
+                    }
                 }, onDelete: {
                     history.removeItem(item)
                 }, onUnmask: { target in
@@ -551,8 +553,16 @@ struct HistoryRowWrapper: View {
     /// 视图主体
     var body: some View {
         Group {
-            if showUnmaskConfirm {
+            // 附加 isSensitive 条件：确认期间记录被批量解密/去重移除时自动退出确认态
+            if showUnmaskConfirm && item.isSensitive {
                 unmaskConfirmView
+                    .contextMenu {
+                        Button(role: .destructive) {
+                            onDelete()
+                        } label: {
+                            Label("删除", systemImage: "trash")
+                        }
+                    }
             } else {
                 HistoryRow(item: item, isClicked: isClicked, onQuestionMark: {
                     showUnmaskConfirm = true
@@ -585,17 +595,18 @@ struct HistoryRowWrapper: View {
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(unmaskFailed ? Color.red : Color.primary)
             Spacer()
-            if !unmaskFailed {
-                // 返回打码状态
-                Button {
-                    showUnmaskConfirm = false
-                } label: {
-                    Image(systemName: "arrow.uturn.backward.circle.fill")
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-                .help("返回")
+            // 返回打码状态（解密失败时也保留，作为唯一退出途径）
+            Button {
+                showUnmaskConfirm = false
+                unmaskFailed = false
+            } label: {
+                Image(systemName: "arrow.uturn.backward.circle.fill")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("返回")
 
+            if !unmaskFailed {
                 Button("取消打码") {
                     if onUnmask(item) {
                         showUnmaskConfirm = false
@@ -677,12 +688,12 @@ struct HistoryRow: View {
                 }
                 .buttonStyle(.plain)
                 .help("不是敏感信息？")
-            } else if item.itemType == .text || item.itemType == .other || item.itemType == .url {
-                // 文本记录可手动恢复打码
+            } else if item.itemType == .text || item.itemType == .other {
+                // 文本记录可手动恢复打码（与实时检测的类型范围一致）
                 Button(action: onLock) {
                     Image(systemName: "lock.fill")
                         .foregroundStyle(.secondary)
-                    }
+                }
                 .buttonStyle(.plain)
                 .help("打码此记录")
             }

@@ -26,7 +26,7 @@ A lightweight macOS clipboard history tool that lives in your menu bar, so you c
 - Clicking a masked record still copies the original text
 
 ### Also
-- Launch at login, clear history on quit, in-app restart
+- Launch at login (toggle in Settings), clear history on quit, in-app restart
 - First-launch onboarding (re-openable from Settings)
 
 ## Installation

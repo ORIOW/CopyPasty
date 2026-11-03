@@ -199,6 +199,9 @@ struct SettingsView: View {
     @AppStorage("clearOnExit") private var clearOnExit = false
     @AppStorage("encryptSensitive") private var encryptSensitive = true
     @State private var isRestartButtonPressed = false
+    @State private var loginItemNeedsApproval = false
+    @State private var loginItemError: String?
+    @State private var isSyncingLoginItem = false
 
     var body: some View {
         VStack(spacing: 20) {
@@ -260,8 +263,25 @@ struct SettingsView: View {
                 }
             }
             .toggleStyle(.switch)
-            .onChange(of: launchAtLogin) { oldValue, newValue in
+            .onChange(of: launchAtLogin) { _, newValue in
+                // onAppear 按系统实际状态纠正开关时不触发注册/注销
+                guard !isSyncingLoginItem else { return }
                 setLoginItemEnabled(newValue)
+            }
+            .onAppear {
+                syncLoginItemState()
+            }
+            if let loginItemError {
+                Text(loginItemError)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if loginItemNeedsApproval {
+                Text("需要在 系统设置 → 通用 → 登录项 中允许 CopyPasty 后才会生效。")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Button("重启CopyPasty") {
@@ -279,39 +299,34 @@ struct SettingsView: View {
         .frame(width: 400)
     }
 
-    /// 设置开机自启动
-    private func setLoginItemEnabled(_ enabled: Bool) {
-        if #available(macOS 13.0, *) {
-            do {
-                if enabled {
-                    try SMAppService.mainApp.register()
-                } else {
-                    try SMAppService.mainApp.unregister()
-                }
-            } catch {
-                print("Failed to update login item: \(error)")
-            }
-        } else {
-            let jobDict = [
-                "Label": "com.CopyPasty.launcher",
-                "ProgramArguments": [Bundle.main.executablePath ?? ""],
-                "RunAtLoad": enabled
-            ] as [String: Any]
-
-            if let plistPath = appSupportPlistPath() {
-                (jobDict as NSDictionary).write(toFile: plistPath, atomically: true)
-            }
-        }
+    /// 以系统登录项的实际注册状态为准纠正开关显示，避免与用户在系统设置中的手动操作脱节
+    private func syncLoginItemState() {
+        let status = SMAppService.mainApp.status
+        let shouldEnable = (status == .enabled || status == .requiresApproval)
+        loginItemNeedsApproval = (status == .requiresApproval)
+        guard launchAtLogin != shouldEnable else { return }
+        isSyncingLoginItem = true
+        launchAtLogin = shouldEnable
+        // onChange 在下一轮视图更新后才触发，需等它处理完再解除保护
+        DispatchQueue.main.async { self.isSyncingLoginItem = false }
     }
 
-    /// 获取启动项 plist 路径
-    private func appSupportPlistPath() -> String? {
-        guard let appSupportDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
-            return nil
+    /// 设置开机自启动
+    private func setLoginItemEnabled(_ enabled: Bool) {
+        do {
+            if enabled {
+                try SMAppService.mainApp.register()
+            } else {
+                try SMAppService.mainApp.unregister()
+            }
+            loginItemError = nil
+            loginItemNeedsApproval = (SMAppService.mainApp.status == .requiresApproval)
+        } catch {
+            // 注册失败时以系统实际状态回拨开关，避免显示与实际不符
+            loginItemError = "设置失败：\(error.localizedDescription)"
+            NSLog("CopyPasty: 登录项设置失败 %@", String(describing: error))
+            syncLoginItemState()
         }
-        let launchAgentsDir = appSupportDir.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("LaunchAgents")
-        try? FileManager.default.createDirectory(at: launchAgentsDir, withIntermediateDirectories: true)
-        return launchAgentsDir.appendingPathComponent("com.CopyPasty.launcher.plist").path
     }
 
     /// 重启应用

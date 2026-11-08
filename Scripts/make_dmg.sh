@@ -19,10 +19,11 @@ CURRENT_PROJECT_VERSION=$(sed -n 's/.*CURRENT_PROJECT_VERSION = \([^;]*\);.*/\1/
 echo "== 版本: $MARKETING_VERSION ($CURRENT_PROJECT_VERSION) =="
 
 # Release 构建（用本机钥匙串的开发者身份签名，本机可直接运行）
+# -allowProvisioningUpdates: 免费团队描述文件 7 天过期，构建时在线刷新
 xcodebuild -project "$PROJECT.xcodeproj" -scheme "$SCHEME" \
     -configuration Release -derivedDataPath "$DERIVED" \
     -destination 'platform=macOS' \
-    DEVELOPMENT_TEAM="$TEAM" CODE_SIGN_STYLE=Automatic build \
+    DEVELOPMENT_TEAM="$TEAM" CODE_SIGN_STYLE=Automatic -allowProvisioningUpdates build \
     2>&1 | { grep -E 'error:|BUILD' || true; }
 
 APP="$DERIVED/Build/Products/Release/CopyPasty.app"

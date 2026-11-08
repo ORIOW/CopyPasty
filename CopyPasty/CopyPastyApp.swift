@@ -29,6 +29,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// 应用启动完成
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // 预热加密密钥：触发 data protection → 传统钥匙串的迁移（profile 过期问题的解耦）
+        HistoryCrypto.warmUp()
         history = ClipboardHistory()
         monitor = ClipboardMonitor(history: history)
         statusBarManager = StatusBarManager(history: history)

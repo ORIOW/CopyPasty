@@ -191,6 +191,11 @@ enum HistoryCrypto {
         return auth.map { String(format: "%02x", $0) }.joined()
     }
 
+    /// 启动预热：触发密钥加载与跨钥匙串迁移，避免迁移依赖用户恰好拷贝敏感内容
+    static func warmUp() {
+        _ = currentKey
+    }
+
     /// 从钥匙串加载密钥，首次使用时生成。
     /// 历史构建可能把密钥写在 data protection 或传统钥匙串之一，两处都找；
     /// 保存时两处都试（不同签名形态可用的钥匙串不同），避免共享可变状态导致静默失败。
@@ -199,6 +204,7 @@ enum HistoryCrypto {
         for useDP in [true, false] {
             if let existing = loadKeyFromKeychain(useDP: useDP) {
                 cachedKey = existing
+                migrateKey(existing, foundIn: useDP)
                 return existing
             }
         }
@@ -207,10 +213,26 @@ enum HistoryCrypto {
             // duplicate 时回读的是钥匙串中实际存储的密钥，必须用它而非 newKey
             if let savedKey = saveKeyToKeychain(newKey, useDP: useDP) {
                 cachedKey = savedKey
+                migrateKey(savedKey, foundIn: useDP)
                 return savedKey
             }
         }
         return nil
+    }
+
+    /// 免费个人团队的描述文件 7 天过期，过期后带 keychain-access-groups 的构建无法启动；
+    /// 新构建移除该 entitlement 后只能访问传统钥匙串。首次从 data protection 读到密钥时
+    /// 同步写入传统钥匙串，保证旧构建加密的历史记录在无 entitlement 构建下仍可解密
+    private static func migrateKey(_ key: SymmetricKey, foundIn useDP: Bool) {
+        if useDP {
+            if saveKeyToKeychain(key, useDP: false) != nil {
+                #if DEBUG
+                NSLog("CopyPasty: 加密密钥已迁移到传统钥匙串")
+                #endif
+            } else {
+                NSLog("CopyPasty: 密钥迁移到传统钥匙串失败，旧记录在新构建下可能无法解密")
+            }
+        }
     }
 
     private static func keychainQuery(useDP: Bool) -> [String: Any] {

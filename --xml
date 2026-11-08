@@ -1,0 +1,20 @@
+[Dict]
+	[Key] com.apple.application-identifier
+	[Value]
+		[String] 6XVGB2XZ5Y.PD.CopyPasty
+	[Key] com.apple.developer.team-identifier
+	[Value]
+		[String] 6XVGB2XZ5Y
+	[Key] com.apple.security.app-sandbox
+	[Value]
+		[Bool] true
+	[Key] com.apple.security.files.user-selected.read-only
+	[Value]
+		[Bool] true
+	[Key] com.apple.security.get-task-allow
+	[Value]
+		[Bool] true
+	[Key] keychain-access-groups
+	[Value]
+		[Array]
+			[String] 6XVGB2XZ5Y.PD.CopyPasty

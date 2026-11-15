@@ -9,6 +9,21 @@ import SwiftUI
 import AppKit
 import ServiceManagement
 
+/// App 以 accessory 方式常驻不抢焦点，非激活状态下窗口的首次点击会被系统用于激活 App，
+/// 不下发给视图（点记录要点两次才生效）。显示面板时配合 NSApp.activate 激活 App；
+/// hosting 视图层再兜底 acceptsFirstMouse（注：系统咨询的是 hitTest 最深视图，
+/// 外层子类的重写通常不会被问到，仅覆盖直接命中的场景）
+private final class FirstMouseHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
+/// 使用 FirstMouseHostingView 的 hosting 控制器（面板与各窗口共用）
+private final class FirstMouseHostingController<Content: View>: NSHostingController<Content> {
+    override func loadView() {
+        view = FirstMouseHostingView(rootView: rootView)
+    }
+}
+
 /// 菜单栏管理器
 class StatusBarManager: NSObject {
     private var statusItem: NSStatusItem?
@@ -34,7 +49,7 @@ class StatusBarManager: NSObject {
     private func setupPopover() {
         popover.behavior = .transient
         popover.animates = true
-        let hostingController = NSHostingController(
+        let hostingController = FirstMouseHostingController(
             rootView: HistoryView(
                 history: history,
                 onSelect: { [weak self] in
@@ -77,6 +92,9 @@ class StatusBarManager: NSObject {
             popover.performClose(sender)
         } else if let button = statusItem?.button {
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            // accessory App 显示面板时自身仍是未激活状态，系统会把用户的第一次点击
+            // 仅用于激活 App 而不下发给视图（表现为点记录要点两次才生效），这里主动激活
+            NSApp.activate(ignoringOtherApps: true)
         }
     }
 
@@ -91,7 +109,7 @@ class StatusBarManager: NSObject {
 
     /// 创建按 SwiftUI 内容自适应大小的窗口（避免手动 layoutSubtreeIfNeeded 与 NSHostingView 布局重入）
     private func makeWindow<Content: View>(title: String, styleMask: NSWindow.StyleMask, @ViewBuilder rootView: () -> Content) -> NSWindow {
-        let window = NSWindow(contentViewController: NSHostingController(rootView: rootView()))
+        let window = NSWindow(contentViewController: FirstMouseHostingController(rootView: rootView()))
         window.styleMask = styleMask
         window.title = title
         window.isReleasedWhenClosed = false

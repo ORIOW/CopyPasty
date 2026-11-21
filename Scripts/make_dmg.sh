@@ -6,7 +6,13 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # 本机 xcode-select 指向 CommandLineTools 时自动改用完整 Xcode（已设 DEVELOPER_DIR 则尊重现值）
-export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode-beta.app}"
+if [ -z "${DEVELOPER_DIR:-}" ]; then
+    if [ -d /Applications/Xcode.app ]; then
+        export DEVELOPER_DIR="/Applications/Xcode.app"
+    elif [ -d /Applications/Xcode-beta.app ]; then
+        export DEVELOPER_DIR="/Applications/Xcode-beta.app"
+    fi
+fi
 
 PROJECT="CopyPasty"
 SCHEME="CopyPasty"

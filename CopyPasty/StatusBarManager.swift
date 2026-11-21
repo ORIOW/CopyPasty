@@ -302,6 +302,19 @@ struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+            VStack(alignment: .leading, spacing: 6) {
+                Button {
+                    openDowntimeExemption()
+                } label: {
+                    Label("在停用时间中豁免 CopyPasty…", systemImage: "moon.stars")
+                }
+                .buttonStyle(.bordered)
+                Text("停用时间（屏幕使用时间）期间，macOS 会阻止打开 CopyPasty 的窗口，菜单栏图标仍在。点击按钮直达系统设置的「屏幕使用时间 → 始终允许」页面，把 CopyPasty 加入列表即可豁免。系统未提供公开接口直接写入该列表，最后一步需在系统设置中完成。")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             Button("重启CopyPasty") {
                 restartApp()
             }
@@ -344,6 +357,15 @@ struct SettingsView: View {
             loginItemError = "设置失败：\(error.localizedDescription)"
             NSLog("CopyPasty: 登录项设置失败 %@", String(describing: error))
             syncLoginItemState()
+        }
+    }
+
+    /// 直达系统设置的「屏幕使用时间 → 始终允许」（停用时间豁免列表）。
+    /// 系统无公开 API 写入该列表，只能引导用户在设置页手动添加
+    private func openDowntimeExemption() {
+        // path=always-allowed 为 undocumented 深链参数，若系统忽略则回落到面板首页，不影响使用
+        if let url = URL(string: "x-apple.systempreferences:com.apple.Screen-Time-Settings.extension?path=always-allowed") {
+            NSWorkspace.shared.open(url)
         }
     }
 
